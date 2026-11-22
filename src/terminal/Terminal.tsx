@@ -79,10 +79,10 @@ export function Terminal({ shell, banner, ref }: { shell: Shell; banner?: string
     if (el) el.scrollTop = el.scrollHeight;
   }, [entries, busy]);
 
-  // Refocus the prompt when a command finishes, unless focus is in the editor (e.g. `mon`
-  // just opened it).
+  // Refocus the prompt when a command finishes, unless focus is in the top pane (e.g. `mon`
+  // just opened the editor).
   useEffect(() => {
-    if (!busy && !document.activeElement?.closest(".editor-pane")) inputRef.current?.focus();
+    if (!busy && !document.activeElement?.closest(".pane")) inputRef.current?.focus();
   }, [busy]);
 
   // Stay scrolled to the bottom when the terminal is resized (e.g. the editor opens).

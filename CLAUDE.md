@@ -28,6 +28,9 @@ bun run build    # production bundle into dist/
 - `src/editor/`: the `mon` editor. `EditorPane.tsx` is the UI, `monaco.ts` is the
   lazily imported Monaco setup, and `workers.ts` bundles Monaco's web workers
   (server-side).
+- `src/preview/`: the `preview` viewer (`PreviewPane.tsx`) and `viewable.ts` (file
+  type detection from magic bytes, then extension).
+- `src/pane/Pane.tsx`: the shared top-pane frame (title bar + close) used by both.
 - `src/terminal/`, `src/settings/`, `src/upload/`: the rest of the React UI. `App.tsx`
   wires them together.
 
@@ -137,6 +140,22 @@ HTML first. Put such scripts in the session scratchpad, not the repo.
 - Each tab holds its own in-memory copy of the disk. Writes are per path, last writer
   wins, and other tabs don't see changes until they reload.
 
+## Top pane: `mon` and `preview`
+
+- `App.tsx` holds one `pane` state (`editor` or `preview`). `ShellHost.openEditor` /
+  `openPreview` set it; an editor with unsaved changes blocks opening anything else.
+  Every open gets a new `token`: the editor re-focuses, the preview remounts (re-reads).
+- Both render inside `<Pane>`. CSS classes are generic (`.pane`, `.pane-titlebar`,
+  `.pane-actions`, `.pane-status`...); the terminal won't steal focus from `.pane`.
+- `preview` builds a `blob:` URL from `fs.readBytes()` inside an effect that also
+  revokes it, which is safe under StrictMode's double run. Images are `<img>`, so SVG
+  scripts never run.
+- Testing: chrome-headless-shell has **no PDF viewer** (`navigator.pdfViewerEnabled`
+  is false, so the pane shows its fallback message). To check real PDF rendering, load
+  the PDF via a `blob:` iframe on a static page and screenshot it with headless
+  Firefox (pdf.js). In flex/grid layouts, use flex for media so `max-height: 100%`
+  resolves; in a grid cell it doesn't.
+
 ## Monaco editor (`mon`)
 
 - `mon` validates the file and calls `shell.host.openEditor(path)`, then returns at
@@ -154,7 +173,7 @@ HTML first. Put such scripts in the session scratchpad, not the repo.
 - The browser's confirm dialogs aren't used: confirmations (unsaved changes, file
   changed on disk) live in the editor's title bar. `beforeunload` warns about unsaved
   edits.
-- The fixed toolbar overlaps the right end of the editor title bar. The title bar
+- The fixed toolbar overlaps the right end of the pane title bar. The title bar
   reserves padding for it, so keep them aligned (56px bar, toolbar centred in it).
 - **Testing Monaco in headless Chromium:** it uses the EditContext API (focused element
   `.native-edit-context`), not a `<textarea>`. Click into `.view-lines` with

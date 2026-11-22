@@ -46,6 +46,8 @@ export type Script = AndOrList[];
 export interface ShellHost {
   /** Open an absolute path in the editor. Returns an error message if it can't. */
   openEditor(path: string): string | null;
+  /** Show an absolute path in the viewer (images, PDF, media). Returns an error message if it can't. */
+  openPreview(path: string): string | null;
 }
 
 export interface IO {

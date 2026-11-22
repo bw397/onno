@@ -15,11 +15,13 @@ bun check      # typecheck
 | Path            | What                                                                 |
 | --------------- | -------------------------------------------------------------------- |
 | `src/shell/`    | Lexer, parser (AST), and `Shell` executor                            |
-| `src/builtins/` | One file per builtin (`cat`, `cd`, `curl`, `df`, `echo`, `find`, `grep`, `ls`, `man`, `mkdir`, `mon`, `pwd`, `rm`) + registry in `index.ts`   |
+| `src/builtins/` | One file per builtin (`cat`, `cd`, `curl`, `df`, `echo`, `find`, `grep`, `ls`, `man`, `mkdir`, `mon`, `preview`, `pwd`, `rm`) + registry in `index.ts`   |
 | `src/fs/`       | `VirtualFS` (in memory, saved to IndexedDB), backends, path helpers, seed |
 | `src/settings/` | Settings context (theme, font size; persisted) + top-right menu      |
 | `src/terminal/` | Terminal UI component                                                |
 | `src/editor/`   | Monaco editor pane for `mon`, Monaco setup, worker bundling           |
+| `src/preview/`  | `preview` viewer pane and file-type detection                         |
+| `src/pane/`     | Shared top-pane frame (title bar + close) used by `mon` and `preview` |
 | `src/upload/`   | Upload button (top right) + logic to copy local files onto the disk  |
 
 ## Shell syntax
@@ -114,3 +116,13 @@ services) are bundled separately, because Bun's bundler doesn't follow
 `new Worker(new URL(...))`: the server builds them at startup (~0.4 s) and serves them
 at `/monaco/*.worker.js`, and `bun run build` writes them to `dist/monaco/`. Monaco's
 CSS (~190 KB) ends up in the main stylesheet.
+
+## preview
+
+`preview FILE` shows images (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO, SVG), PDFs, audio
+and video in the same top pane as `mon`, with its own title bar: type, size and
+dimensions; Fit/100% for images; Download; close (or Esc). The type is detected from
+the file's contents, so misnamed uploads still work. SVGs are shown as images, so
+scripts inside them don't run. PDFs use the browser's built-in viewer; browsers without
+one get a message pointing to Download. Only one pane is open at a time, and an
+editor with unsaved changes has to be saved or closed first.

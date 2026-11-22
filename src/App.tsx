@@ -1,5 +1,6 @@
 import { Suspense, use, useCallback, useEffect, useRef, useState } from "react";
 import { EditorPane } from "./editor/EditorPane";
+import { PreviewPane } from "./preview/PreviewPane";
 import { createBuiltinRegistry } from "./builtins";
 import { IndexedDBBackend, LEGACY_STORAGE_KEY, MemoryBackend, readLegacyDisk, VirtualFS } from "./fs";
 import { SettingsMenu, SettingsProvider } from "./settings";
@@ -56,32 +57,37 @@ function Workspace() {
   const terminal = useRef<TerminalHandle>(null);
   const [uploading, setUploading] = useState(false);
 
-  // The file open in the editor, if any. `token` changes to re-focus it.
-  const [editing, setEditing] = useState<{ path: string; token: number } | null>(null);
-  const editingRef = useRef(editing);
-  editingRef.current = editing;
-  const dirtyRef = useRef(false);
+  // What's open in the top pane, if anything. `token` changes on every open, so opening
+  // the same file again re-focuses the editor or refreshes the preview.
+  const [pane, setPane] = useState<{ kind: "editor" | "preview"; path: string; token: number } | null>(null);
+  const paneRef = useRef(pane);
+  paneRef.current = pane;
+  const dirtyRef = useRef(false); // the editor has unsaved changes
 
-  // Let `mon` open the editor.
+  // Let `mon` and `preview` open the top pane (one thing at a time).
   useEffect(() => {
+    const open = (kind: "editor" | "preview", path: string): string | null => {
+      const current = paneRef.current;
+      const sameEditor = current?.kind === "editor" && kind === "editor" && current.path === path;
+      if (current?.kind === "editor" && dirtyRef.current && !sameEditor) {
+        return `${tildePath(current.path, shell.env.HOME)} has unsaved changes; save or close it first`;
+      }
+      if (!sameEditor) dirtyRef.current = false;
+      setPane({ kind, path, token: (current?.token ?? 0) + 1 });
+      return null;
+    };
     shell.host = {
-      openEditor(path) {
-        const current = editingRef.current;
-        if (current && current.path !== path && dirtyRef.current) {
-          return `${tildePath(current.path, shell.env.HOME)} has unsaved changes; save or close it first`;
-        }
-        setEditing({ path, token: (current?.token ?? 0) + 1 });
-        return null;
-      },
+      openEditor: (path) => open("editor", path),
+      openPreview: (path) => open("preview", path),
     };
     return () => {
       shell.host = undefined;
     };
   }, [shell]);
 
-  const closeEditor = useCallback(() => {
+  const closePane = useCallback(() => {
     dirtyRef.current = false;
-    setEditing(null);
+    setPane(null);
     terminal.current?.focus();
   }, []);
   const onDirtyChange = useCallback((dirty: boolean) => {
@@ -108,17 +114,20 @@ function Workspace() {
 
   return (
     <div className="workspace">
-      {editing && (
+      {pane?.kind === "editor" && (
         <EditorPane
-          key={editing.path}
+          key={`editor:${pane.path}`}
           fs={shell.fs}
-          path={editing.path}
-          focusToken={editing.token}
+          path={pane.path}
+          focusToken={pane.token}
           displayPath={displayPath}
-          onClose={closeEditor}
+          onClose={closePane}
           onDirtyChange={onDirtyChange}
           print={print}
         />
+      )}
+      {pane?.kind === "preview" && (
+        <PreviewPane key={`preview:${pane.token}`} fs={shell.fs} path={pane.path} displayPath={displayPath} onClose={closePane} />
       )}
       <div className="toolbar">
         <UploadButton onFiles={onFiles} disabled={uploading} />

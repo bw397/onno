@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type * as Monaco from "monaco-editor";
 import { FsError, path as fsPath, type VirtualFS } from "../fs";
+import { Pane } from "../pane/Pane";
 import { useSettings } from "../settings";
 
 type MonacoModule = typeof import("./monaco");
@@ -155,57 +156,48 @@ export function EditorPane({ fs, path, focusToken, displayPath, onClose, onDirty
   };
 
   return (
-    <section
-      className="editor-pane"
-      aria-label={`Editing ${name}`}
+    <Pane
+      label={`Editing ${name}`}
+      title={name}
+      titleTooltip={path}
+      titleExtra={dirty && <span className="editor-dirty" aria-label="unsaved changes" title="Unsaved changes" />}
+      onClose={requestClose}
       onKeyDown={(e) => {
         if (e.key === "Escape" && prompt) {
           e.preventDefault();
           cancelPrompt();
         }
       }}
+      middle={
+        <>
+          {prompt === "close" && (
+            <span className="pane-prompt" role="alert">
+              Unsaved changes.
+              <button type="button" onClick={async () => (await save()) && onClose()}>Save and close</button>
+              <button type="button" className="danger" onClick={onClose}>Discard</button>
+              <button type="button" onClick={cancelPrompt}>Cancel</button>
+            </span>
+          )}
+          {prompt === "conflict" && (
+            <span className="pane-prompt" role="alert">
+              Changed on disk since you opened it.
+              <button type="button" className="danger" onClick={() => void save(true)}>Overwrite</button>
+              <button type="button" onClick={() => { loadFromDisk(); cancelPrompt(); }}>Reload</button>
+              <button type="button" onClick={cancelPrompt}>Cancel</button>
+            </span>
+          )}
+          {!prompt && notice && <span className={`pane-notice ${notice.kind}`}>{notice.text}</span>}
+        </>
+      }
+      actions={
+        <button type="button" onClick={() => void save()} disabled={state !== "ready"} title="Save (Ctrl+S)">
+          Save
+        </button>
+      }
     >
-      <header className="editor-titlebar">
-        <span className="editor-title" title={path}>
-          {name}
-          {dirty && <span className="editor-dirty" aria-label="unsaved changes" title="Unsaved changes" />}
-        </span>
-
-        {prompt === "close" && (
-          <span className="editor-prompt" role="alert">
-            Unsaved changes.
-            <button type="button" onClick={async () => (await save()) && onClose()}>Save and close</button>
-            <button type="button" className="danger" onClick={onClose}>Discard</button>
-            <button type="button" onClick={cancelPrompt}>Cancel</button>
-          </span>
-        )}
-        {prompt === "conflict" && (
-          <span className="editor-prompt" role="alert">
-            Changed on disk since you opened it.
-            <button type="button" className="danger" onClick={() => void save(true)}>Overwrite</button>
-            <button type="button" onClick={() => { loadFromDisk(); cancelPrompt(); }}>Reload</button>
-            <button type="button" onClick={cancelPrompt}>Cancel</button>
-          </span>
-        )}
-        {!prompt && notice && <span className={`editor-notice ${notice.kind}`}>{notice.text}</span>}
-
-        <span className="editor-actions">
-          <button type="button" onClick={() => void save()} disabled={state !== "ready"} title="Save (Ctrl+S)">
-            Save
-          </button>
-          <button type="button" className="editor-close" onClick={requestClose} aria-label="Close editor" title="Close editor">
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-              <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-          </button>
-        </span>
-      </header>
-
-      <div className="editor-body">
-        {state === "loading" && <div className="editor-status">Loading editor…</div>}
-        {typeof state === "object" && <div className="editor-status error">Couldn't load the editor: {state.error}</div>}
-        <div ref={containerRef} className="editor-monaco" />
-      </div>
-    </section>
+      {state === "loading" && <div className="pane-status">Loading editor…</div>}
+      {typeof state === "object" && <div className="pane-status error">Couldn't load the editor: {state.error}</div>}
+      <div ref={containerRef} className="editor-monaco" />
+    </Pane>
   );
 }

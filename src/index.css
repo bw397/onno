@@ -264,7 +264,7 @@ body {
   color: var(--muted);
 }
 
-/* ---- workspace: editor on top (80%), terminal below ------------------- */
+/* ---- workspace: a pane (editor or preview) on top (80%), terminal below ---- */
 
 .workspace {
   height: 100%;
@@ -278,7 +278,7 @@ body {
   min-height: 0;
 }
 
-.editor-pane {
+.pane {
   flex: 0 0 80%;
   min-height: 0;
   display: flex;
@@ -287,11 +287,11 @@ body {
 }
 
 /* While editing, the terminal no longer sits under the toolbar. */
-.editor-pane ~ .terminal {
+.pane ~ .terminal {
   padding-right: 1.25rem;
 }
 
-.editor-titlebar {
+.pane-titlebar {
   flex: 0 0 auto;
   height: 56px; /* the fixed toolbar (top right) is centred in this bar */
   display: flex;
@@ -306,15 +306,22 @@ body {
   white-space: nowrap;
 }
 
-.editor-title {
+.pane-title {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   font-family: var(--font-mono);
   font-weight: 600;
+}
+
+.pane-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pane:focus {
+  outline: none;
 }
 
 .editor-dirty {
@@ -325,8 +332,8 @@ body {
   background: var(--accent);
 }
 
-.editor-prompt,
-.editor-notice {
+.pane-prompt,
+.pane-notice {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -334,23 +341,23 @@ body {
   overflow: hidden;
 }
 
-.editor-notice {
+.pane-notice {
   color: var(--muted);
 }
 
-.editor-notice.error,
-.editor-status.error {
+.pane-notice.error,
+.pane-status.error {
   color: var(--error);
 }
 
-.editor-actions {
+.pane-actions {
   margin-left: auto;
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
-.editor-titlebar button {
+.pane-titlebar button {
   height: 28px;
   padding: 0 10px;
   border: 1px solid var(--border);
@@ -361,27 +368,27 @@ body {
   cursor: pointer;
 }
 
-.editor-titlebar button:hover:not(:disabled) {
+.pane-titlebar button:hover:not(:disabled) {
   background: var(--hover);
 }
 
-.editor-titlebar button:disabled {
+.pane-titlebar button:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
-.editor-titlebar button.danger {
+.pane-titlebar button.danger {
   color: var(--error);
 }
 
-.editor-titlebar .editor-close {
+.pane-titlebar .pane-close {
   display: grid;
   place-items: center;
   width: 28px;
   padding: 0;
 }
 
-.editor-body {
+.pane-body {
   position: relative;
   flex: 1;
   min-height: 0;
@@ -392,10 +399,96 @@ body {
   inset: 0;
 }
 
-.editor-status {
+.pane-status {
   position: absolute;
   inset: 0;
   padding: 1rem;
   color: var(--muted);
   font-family: var(--font-ui);
+}
+
+/* ---- preview ---------------------------------------------------------- */
+
+.pane-titlebar .pane-button {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.pane-titlebar .pane-button:hover {
+  background: var(--hover);
+}
+
+/* Checkerboard behind images, so transparency is visible. */
+.preview-image {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(45deg, var(--hover) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--hover) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--hover) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--hover) 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+}
+
+/* Flex (not grid) so the image's percentage max sizes resolve against the pane. */
+.preview-image.fit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  overflow: hidden;
+}
+
+.preview-image.fit img {
+  max-width: 100%;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
+  object-fit: contain;
+}
+
+.preview-image.actual img {
+  display: block;
+  max-width: none;
+  margin: 1rem;
+}
+
+.preview-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.preview-media {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: var(--bg);
+}
+
+.preview-media video {
+  max-width: 100%;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.preview-media audio {
+  width: min(600px, 100%);
 }

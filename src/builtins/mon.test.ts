@@ -20,6 +20,7 @@ beforeEach(async () => {
       opened.push(path);
       return null;
     },
+    openPreview: () => null,
   };
   shell = new Shell(fs, createBuiltinRegistry(), { host });
 });
@@ -63,7 +64,7 @@ describe("mon", () => {
   });
 
   test("reports the host's refusal", async () => {
-    shell.host = { openEditor: () => "~/a.txt has unsaved changes; save or close it first" };
+    shell.host = { openEditor: () => "~/a.txt has unsaved changes; save or close it first", openPreview: () => null };
     expect(await run("mon notes.txt")).toEqual({
       stdout: "",
       stderr: "mon: ~/a.txt has unsaved changes; save or close it first\n",
