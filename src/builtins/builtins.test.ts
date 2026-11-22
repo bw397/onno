@@ -1,17 +1,19 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { MemoryStore, VirtualFS } from "../fs";
+import { MemoryBackend, VirtualFS } from "../fs";
 import { Shell } from "../shell";
 import { createBuiltinRegistry } from ".";
 
 let fs: VirtualFS;
 let shell: Shell;
 
-beforeEach(() => {
-  fs = new VirtualFS(new MemoryStore(), "test", (f) => {
-    f.mkdir("/home/user/docs", { recursive: true });
-    f.mkdir("/bin");
-    f.writeFile("/home/user/a.txt", "alpha\n");
-    f.writeFile("/home/user/docs/b.txt", "beta\n");
+beforeEach(async () => {
+  fs = await VirtualFS.open(new MemoryBackend(), {
+    seed: (f) => {
+      f.mkdir("/home/user/docs", { recursive: true });
+      f.mkdir("/bin");
+      f.writeFile("/home/user/a.txt", "alpha\n");
+      f.writeFile("/home/user/docs/b.txt", "beta\n");
+    },
   });
   shell = new Shell(fs, createBuiltinRegistry());
 });

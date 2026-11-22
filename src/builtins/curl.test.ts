@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { MemoryStore, VirtualFS } from "../fs";
+import { MemoryBackend, VirtualFS } from "../fs";
 import { Shell } from "../shell";
 import { createBuiltinRegistry } from ".";
 
@@ -23,6 +23,10 @@ const server = Bun.serve({
         return new Response("late");
       case "/files/data.txt":
         return new Response("file contents");
+      case "/image.png":
+        return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe]));
+      case "/bytes":
+        return new Response(new Uint8Array(await req.arrayBuffer()).join(","));
       default:
         return new Response("not found", { status: 404, statusText: "Not Found" });
     }
@@ -34,10 +38,12 @@ const base = `http://localhost:${server.port}`;
 let fs: VirtualFS;
 let shell: Shell;
 
-beforeEach(() => {
-  fs = new VirtualFS(new MemoryStore(), "test", (f) => {
-    f.mkdir("/home/user", { recursive: true });
-    f.writeFile("/home/user/body.txt", "a=1\nb=2\n");
+beforeEach(async () => {
+  fs = await VirtualFS.open(new MemoryBackend(), {
+    seed: (f) => {
+      f.mkdir("/home/user", { recursive: true });
+      f.writeFile("/home/user/body.txt", "a=1\nb=2\n");
+    },
   });
   shell = new Shell(fs, createBuiltinRegistry());
 });
@@ -106,6 +112,29 @@ describe("curl", () => {
     expect(fs.readFile("/home/user/data.txt")).toBe("file contents");
     expect((await run(`curl -O ${base}/`)).status).toBe(23);
     expect((await run(`curl -o /missing/x ${base}/hello`)).status).toBe(23);
+  });
+
+  test("-o saves binary bodies byte for byte", async () => {
+    await run(`curl -o pic.png ${base}/image.png`);
+    expect(fs.isBinary("/home/user/pic.png")).toBe(true);
+    expect(fs.readBytes("/home/user/pic.png")).toEqual(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe]));
+    expect(fs.isBinary("/home/user/out.txt")).toBe(false);
+  });
+
+  test("--data-binary @file sends a binary file's exact bytes", async () => {
+    fs.writeFile("/home/user/blob", new Uint8Array([0, 255, 10, 13]));
+    expect((await run(`curl --data-binary @blob ${base}/bytes`)).stdout).toBe("0,255,10,13");
+  });
+
+  test("a download that doesn't fit is curl's exit 23 and leaves nothing behind", async () => {
+    const tiny = await VirtualFS.open(new MemoryBackend(300), { seed: (f) => f.mkdir("/home/user", { recursive: true }) });
+    shell = new Shell(tiny, createBuiltinRegistry());
+    const r = await run(`curl -o big ${base}/files/data.txt -H 'X-Pad: ${"p".repeat(10)}' -d ${"z".repeat(10)} -X GET`);
+    expect(r.status).toBe(0); // small file fits
+    const big = await run(`curl -o huge ${base}/echo -d ${"z".repeat(400)}`);
+    expect(big.status).toBe(23);
+    expect(big.stderr).toContain("No space left on device");
+    expect(tiny.exists("/home/user/huge")).toBe(false);
   });
 
   test("HTTP errors: body by default, exit 22 with -f", async () => {

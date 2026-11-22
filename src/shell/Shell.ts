@@ -101,7 +101,20 @@ export class Shell {
     return status;
   }
 
+  /** Run one command, then save its disk changes; a failed save fails the command. */
   private async runCommand(cmd: SimpleCommand, stdin: string, io: IO): Promise<ExitStatus> {
+    const status = await this.execCommand(cmd, stdin, io);
+    try {
+      await this.fs.flush();
+    } catch (err) {
+      if (!(err instanceof FsError)) throw err;
+      io.stderr(`onno: ${err.message}\n`);
+      return 1;
+    }
+    return status;
+  }
+
+  private async execCommand(cmd: SimpleCommand, stdin: string, io: IO): Promise<ExitStatus> {
     const argv = cmd.argv.map((w) => this.expand(w));
 
     let outFile: string | null = null;
@@ -132,7 +145,6 @@ export class Shell {
       try {
         this.fs.writeFile(outFile, buffered, { append: true });
       } catch (err) {
-        // e.g. ENOSPC: the output didn't fit in storage
         if (!(err instanceof FsError)) throw err;
         io.stderr(`onno: ${outFile}: ${err.message}\n`);
         return 1;

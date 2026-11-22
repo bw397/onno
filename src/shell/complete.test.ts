@@ -1,22 +1,24 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { createBuiltinRegistry } from "../builtins";
-import { MemoryStore, VirtualFS } from "../fs";
+import { MemoryBackend, VirtualFS } from "../fs";
 import { complete } from "./complete";
 import { Shell } from "./Shell";
 
 let shell: Shell;
 
-beforeEach(() => {
-  const fs = new VirtualFS(new MemoryStore(), "test", (f) => {
-    f.mkdir("/home/user/documents", { recursive: true });
-    f.mkdir("/home/user/downloads");
-    f.mkdir("/home/user/my dir");
-    f.mkdir("/bin");
-    f.writeFile("/bin/motd", "");
-    f.writeFile("/bin/mkthing", "");
-    f.writeFile("/home/user/notes.txt", "");
-    f.writeFile("/home/user/.secret", "");
-    f.writeFile("/home/user/documents/report.txt", "");
+beforeEach(async () => {
+  const fs = await VirtualFS.open(new MemoryBackend(), {
+    seed: (f) => {
+      f.mkdir("/home/user/documents", { recursive: true });
+      f.mkdir("/home/user/downloads");
+      f.mkdir("/home/user/my dir");
+      f.mkdir("/bin");
+      f.writeFile("/bin/motd", "");
+      f.writeFile("/bin/mkthing", "");
+      f.writeFile("/home/user/notes.txt", "");
+      f.writeFile("/home/user/.secret", "");
+      f.writeFile("/home/user/documents/report.txt", "");
+    },
   });
   shell = new Shell(fs, createBuiltinRegistry());
 });

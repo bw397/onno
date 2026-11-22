@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 onno is a terminal in the browser: a small shell that runs builtin commands, or script
-files from a virtual disk stored in `localStorage`. It uses Bun, React 19 and TypeScript
+files from a virtual disk saved in IndexedDB. It uses Bun, React 19 and TypeScript
 (strict, with `noUncheckedIndexedAccess`). It's entirely client-side: `src/index.ts`
 only serves `index.html`.
 
@@ -21,8 +21,10 @@ bun run build    # production bundle into dist/
   `CommandContext` and `IO` contracts.
 - `src/builtins/`: one file per command, registered in `index.ts`. `options.ts` is the
   shared getopt-style parser.
-- `src/fs/`: `VirtualFS` (a path -> node map, saved as one JSON blob), `path.ts`, the
-  first-run `seed.ts`, and `quota.ts` (localStorage usage/quota measurement).
+- `src/fs/`: `VirtualFS` (an in-memory path -> node map), `backend.ts` (the
+  `StorageBackend` interface + `MemoryBackend`), `idb.ts` (`IndexedDBBackend`),
+  `content.ts` (text/binary helpers), `legacy.ts` (importing the old localStorage disk),
+  `path.ts` and `seed.ts`.
 - `src/terminal/`, `src/settings/`, `src/upload/`: the React UI. `App.tsx` wires
   them together.
 
@@ -62,19 +64,37 @@ bun run build    # production bundle into dist/
    - Commands that delete things must refuse the working directory and its parents,
      like `rm` and `find -delete` do.
 5. Mirror GNU behaviour where it's cheap. For grep and find, the outputs were checked
-   against the system's GNU tools; keep it that way.
+   against the system's GNU tools; keep it that way. **In Claude Code's Bash tool,
+   `grep` and `find` are shell functions that run an embedded ugrep and bfs**, which
+   behave differently (e.g. binary-file messages, `./` prefixes). Compare against
+   `/usr/bin/grep` and `/usr/bin/find` (GNU grep 3.12, findutils 4.11), or run through
+   a fresh `bash -c`.
 
 ## Filesystem invariants
 
-- Every mutation goes through `VirtualFS.commit()`. If saving fails (localStorage
-  `QuotaExceededError`), memory is rolled back and `FsError("ENOSPC")` is thrown, so
-  memory and storage never disagree. Keep new mutating methods inside `commit()`.
-- The disk stores **text only**. Uploads reject binary data; curl decodes bodies as
-  UTF-8.
-- localStorage keys: `onno:fs:v1` (the disk) and `onno:settings`. If the stored format
-  changes, bump the version in the key; don't silently reinterpret old data.
-- Tests use `MemoryStore`. Pass a quota (`new MemoryStore(1000)`) to simulate a full
-  disk. It throws like the real localStorage does.
+- **Sync API, async persistence.** `VirtualFS` keeps the whole disk in memory, so
+  reads and writes are synchronous (builtins and Tab completion depend on that).
+  Mutations queue changes; `await fs.flush()` saves them in one atomic IndexedDB
+  transaction. The shell flushes after every command, and uploads flush per file. If a
+  flush fails, the queued changes are rolled back in memory and `FsError` is thrown
+  (`ENOSPC` for quota, `EIO` otherwise), so memory always matches storage.
+- A builtin that wants to handle a save failure itself flushes explicitly (`curl -o`
+  does, to exit 23); otherwise the shell reports it after the command.
+- Mutating methods validate everything before changing anything, so a throwing call
+  queues nothing. Keep new ones that way, and route all changes through `set()`.
+- File content is `string | Uint8Array` (`FileContent`). Valid UTF-8 stays a string
+  (`fromBytes()`). `readFile()` is the text view (binary is decoded lossily);
+  `readBytes()`/`isBinary()` exist for byte-exact work. `FileNode.size` is bytes; use
+  it, not `content.length`. Pipes and redirects carry text only.
+- IndexedDB layout: database `onno` v1, store `nodes`, key = path. Schema changes need
+  a version bump plus an `onupgradeneeded` migration. `onno:settings` stays in
+  localStorage.
+- Startup is async: `App.tsx` opens the disk with React 19's `use()` under `<Suspense>`,
+  migrates `onno:fs:v1` from localStorage once, and falls back to `MemoryBackend`
+  (with a notice) if IndexedDB is unavailable.
+- Tests use `VirtualFS.open(new MemoryBackend(quotaBytes?), { seed })`. A quota makes
+  commits fail like a full browser. `IndexedDBBackend` is tested with `fake-indexeddb`
+  (a dev dependency); pass its `IDBFactory` to `IndexedDBBackend.open(name, factory)`.
 
 ## Testing
 
@@ -106,9 +126,10 @@ HTML first. Put such scripts in the session scratchpad, not the repo.
   windows. Ctrl+Backspace already deletes words natively.
 - curl only reaches same-origin or CORS-enabled URLs, and failures can't be told apart
   (unreachable host vs. CORS). An https deployment can't fetch http:// URLs.
-- No API reports localStorage quota; `df` probes it once per session (~10 ms in
-  Chromium, ~200 ms in Firefox, about 5 MiB each). Each probe write fires `storage`
-  events in other tabs.
+- `navigator.storage.estimate()` is approximate (it may be padded) and covers all of
+  the site's storage, so `df` usage won't exactly equal the disk's size.
+- Each tab holds its own in-memory copy of the disk. Writes are per path, last writer
+  wins, and other tabs don't see changes until they reload.
 
 ## UI notes
 

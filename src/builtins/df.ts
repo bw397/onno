@@ -2,9 +2,9 @@ import type { Builtin } from "../shell";
 import { OptionError, parseOptions, type OptionSpec } from "./options";
 
 const USAGE = `usage: df [-h] [-k] [-v] [FILE]...
-  -h   human-readable sizes (K, M)
+  -h   human-readable sizes (K, M, G)
   -k   1K blocks (default)
-  -v   also show the disk's share and entry count`;
+  -v   also show the disk's size, entry count and whether storage is persistent`;
 
 const SPECS: OptionSpec[] = [
   { key: "human", short: "h", long: "human-readable" },
@@ -12,9 +12,9 @@ const SPECS: OptionSpec[] = [
   { key: "verbose", short: "v", long: "verbose" },
 ];
 
-/** GNU df -h style: powers of 1024, one decimal below 10. */
-function human(n: number): string {
-  const units = ["", "K", "M", "G", "T"];
+/** GNU df -h style: powers of 1024, one decimal below 10, rounded up. */
+export function human(n: number): string {
+  const units = ["", "K", "M", "G", "T", "P"];
   let value = n;
   let unit = 0;
   while (value >= 1024 && unit < units.length - 1) {
@@ -22,7 +22,6 @@ function human(n: number): string {
     unit++;
   }
   if (unit === 0) return String(n);
-  // GNU rounds up so it never under-reports.
   const rounded = value < 10 ? Math.ceil(value * 10) / 10 : Math.ceil(value);
   return (value < 10 ? rounded.toFixed(1) : String(rounded)) + units[unit];
 }
@@ -31,36 +30,38 @@ const blocks = (n: number) => String(Math.ceil(n / 1024));
 
 function table(rows: string[][]): string {
   const widths = rows[0]!.map((_, c) => Math.max(...rows.map((r) => r[c]!.length)));
-  return rows
-    .map((r) =>
-      r
-        .map((cell, c) => {
-          // First and last columns are left-aligned text; the numbers in between align right.
-          if (c === 0) return cell.padEnd(widths[c]!);
-          if (c === r.length - 1) return cell;
-          return cell.padStart(widths[c]!);
-        })
-        .join(" "),
-    )
-    .join("\n") + "\n";
+  return (
+    rows
+      .map((r) =>
+        r
+          .map((cell, c) => {
+            // First and last columns are text; the numbers in between align right.
+            if (c === 0) return cell.padEnd(widths[c]!);
+            if (c === r.length - 1) return cell;
+            return cell.padStart(widths[c]!);
+          })
+          .join(" "),
+      )
+      .join("\n") + "\n"
+  );
 }
 
 export const df: Builtin = {
   name: "df",
-  summary: "report localStorage space usage",
+  summary: "report browser storage space usage",
   usage: USAGE,
   description:
-    "Show space used and available in the browser's localStorage, which holds the " +
-    "disk as a single entry. Used space counts every localStorage key for this site. " +
-    "Browsers don't report the quota (usually 5 MiB), so it's measured on first use by " +
-    "probing how much more localStorage accepts. Sizes count characters of stored " +
-    "text: one byte each for ASCII.",
+    "Show space used and available for this site's browser storage, which holds the disk " +
+    "in IndexedDB. Figures come from the browser (navigator.storage.estimate()): usage " +
+    "covers everything this site stores and may be rounded or padded, and the quota is " +
+    "usually a large share of free disk space. Browsers may evict non-persistent storage " +
+    "when the device runs low on space; -v shows whether this site's storage is persistent.",
   examples: [
     { command: "df", description: "Show usage in 1K blocks." },
     { command: "df -h", description: "Human-readable sizes." },
-    { command: "df -hv", description: "Also show how much is the disk vs. other keys." },
+    { command: "df -hv", description: "Also show the disk's own size and persistence." },
   ],
-  run(ctx) {
+  async run(ctx) {
     let options;
     let operands: string[];
     try {
@@ -70,28 +71,15 @@ export const df: Builtin = {
       ctx.stderr(`df: ${err.message}\n${USAGE}\n`);
       return 1;
     }
-    const lastUnit = options.findLast((o) => o.key === "human" || o.key === "kilo")?.key;
-    const isHuman = lastUnit === "human";
+    const isHuman = options.findLast((o) => o.key === "human" || o.key === "kilo")?.key === "human";
     const verbose = options.some((o) => o.key === "verbose");
 
     // Every path is on the same "filesystem"; just check they exist.
-    let status = 0;
-    for (const file of operands) {
-      if (!ctx.fs.exists(ctx.resolvePath(file))) {
-        ctx.stderr(`df: ${file}: No such file or directory\n`);
-        status = 1;
-      }
-    }
-    if (operands.length && status !== 0 && operands.every((f) => !ctx.fs.exists(ctx.resolvePath(f)))) {
-      return status;
-    }
+    const missing = operands.filter((f) => !ctx.fs.exists(ctx.resolvePath(f)));
+    for (const file of missing) ctx.stderr(`df: ${file}: No such file or directory\n`);
+    if (operands.length && missing.length === operands.length) return 1;
 
-    const usage = ctx.fs.storageUsage();
-    if (!usage) {
-      ctx.stderr("df: storage usage is unavailable for this disk\n");
-      return 1;
-    }
-
+    const usage = await ctx.fs.storageUsage();
     const limited = Number.isFinite(usage.quota);
     const fmt = isHuman ? human : blocks;
     const pct = limited && usage.quota > 0 ? `${Math.ceil((usage.used * 100) / usage.quota)}%` : "-";
@@ -102,7 +90,7 @@ export const df: Builtin = {
       table([
         header,
         [
-          "localStorage",
+          usage.durable ? "indexeddb" : "memory",
           limited ? fmt(usage.quota) : "-",
           fmt(usage.used),
           limited ? fmt(usage.available) : "-",
@@ -113,13 +101,16 @@ export const df: Builtin = {
     );
 
     if (verbose) {
-      const size = (n: number) => (isHuman ? human(n) : `${n}`);
-      ctx.stdout(
-        `\ndisk (files + directories): ${size(usage.disk)}, ${usage.entries} entries\n` +
-          `other localStorage keys:    ${size(usage.used - usage.disk)}\n` +
-          (limited ? "" : "(no quota: this disk is in memory and won't persist)\n"),
-      );
+      const size = (n: number) => (isHuman ? human(n) : `${n} bytes`);
+      const persistence = !usage.durable
+        ? "none: this disk is in memory and won't survive a reload"
+        : usage.persisted === true
+          ? "persistent (the browser won't evict it)"
+          : usage.persisted === false
+            ? "best-effort (the browser may evict it if the device runs low on space)"
+            : "unknown";
+      ctx.stdout(`\ndisk: ${size(usage.disk)} in ${usage.entries} files and directories\nstorage: ${persistence}\n`);
     }
-    return status;
+    return missing.length ? 1 : 0;
   },
 };

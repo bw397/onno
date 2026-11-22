@@ -1,4 +1,4 @@
-import { FsError, path } from "../fs";
+import { concat, FsError, fromBytes, path, type FileContent } from "../fs";
 import type { Builtin, CommandContext } from "../shell";
 import { OptionError, parseOptions, type OptionSpec } from "./options";
 
@@ -136,16 +136,18 @@ function parseUrl(raw: string): URL | null {
   }
 }
 
-function buildBody(ctx: CommandContext, data: Options["data"]): string | undefined {
+function buildBody(ctx: CommandContext, data: Options["data"]): FileContent | undefined {
   if (!data.length) return undefined;
-  return data
-    .map(({ mode, value }) => {
-      if (mode === "raw" || !value.startsWith("@")) return value;
-      const file = value.slice(1);
-      const content = file === "-" ? ctx.stdin : ctx.fs.readFile(ctx.resolvePath(file));
-      return mode === "data" ? content.replace(/[\r\n]/g, "") : content;
-    })
-    .join("&");
+  const parts = data.map(({ mode, value }): FileContent => {
+    if (mode === "raw" || !value.startsWith("@")) return value;
+    const file = value.slice(1);
+    if (file === "-") return mode === "data" ? ctx.stdin.replace(/[\r\n]/g, "") : ctx.stdin;
+    const abs = ctx.resolvePath(file);
+    // --data-binary sends a file's exact bytes; -d sends text with newlines removed.
+    if (mode === "binary") return ctx.fs.isBinary(abs) ? ctx.fs.readBytes(abs) : ctx.fs.readFile(abs);
+    return ctx.fs.readFile(abs).replace(/[\r\n]/g, "");
+  });
+  return parts.reduce((acc, part) => concat(concat(acc, "&"), part));
 }
 
 function formatHeaders(res: Response): string {
@@ -203,7 +205,7 @@ export const curl: Builtin = {
       outputPath = ctx.resolvePath(name);
     }
 
-    let body: string | undefined;
+    let body: FileContent | undefined;
     try {
       body = buildBody(ctx, opts.data);
     } catch (err) {
@@ -235,16 +237,22 @@ export const curl: Builtin = {
     }
 
     let res: Response;
-    let text: string;
+    let text = "";
+    let bytes: Uint8Array | undefined;
     try {
       res = await fetch(url, {
         method,
         headers,
-        body: method === "GET" || method === "HEAD" ? undefined : body,
+        // Our bytes are always backed by a plain ArrayBuffer, which is what fetch() takes.
+        body: method === "GET" || method === "HEAD" ? undefined : (body as BodyInit | undefined),
         signal,
         redirect: "follow",
       });
-      text = method === "HEAD" ? "" : await res.text();
+      // Saving to a file keeps the exact bytes (images, archives...); stdout is text.
+      if (method !== "HEAD") {
+        if (outputPath && !opts.head) bytes = new Uint8Array(await res.arrayBuffer());
+        else text = await res.text();
+      }
     } catch (err) {
       if (ctx.signal?.aborted) return EXIT.interrupted;
       if (timeout?.aborted) return error(EXIT.timeout, `Operation timed out after ${opts.maxTime! * 1000} milliseconds`);
@@ -269,16 +277,16 @@ export const curl: Builtin = {
     }
 
     const head = opts.include || opts.head ? formatHeaders(res) + "\n" : "";
-    const content = head + (opts.head ? "" : text);
     if (outputPath) {
       try {
-        ctx.fs.writeFile(outputPath, content);
+        ctx.fs.writeFile(outputPath, bytes ? concat(head, fromBytes(bytes)) : head);
+        await ctx.fs.flush(); // save now, so a full disk is reported as curl's exit 23
       } catch (err) {
         if (!(err instanceof FsError)) throw err;
         return error(EXIT.write, `Failed writing to ${opts.output ?? path.basename(outputPath)}: ${err.message}`);
       }
     } else {
-      ctx.stdout(content);
+      ctx.stdout(head + (opts.head ? "" : text));
     }
     return 0;
   },

@@ -1,18 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { MemoryStore, VirtualFS } from "../fs";
+import { MemoryBackend, VirtualFS } from "../fs";
 import { parse, Shell } from "../shell";
 import { builtins, createBuiltinRegistry } from ".";
 
 /** A shell on the default seeded disk, plus a few files the examples mention. */
-function freshShell() {
-  const fs = new VirtualFS(new MemoryStore());
+async function freshShell() {
+  const fs = await VirtualFS.open(new MemoryBackend());
   for (const f of ["a.txt", "b.txt", "old.txt"]) fs.writeFile(`/home/user/${f}`, `${f}\n`);
   fs.mkdir("/home/user/build");
   fs.writeFile("/home/user/build/out.js", "x");
   return new Shell(fs, createBuiltinRegistry());
 }
 
-async function run(line: string, shell = freshShell()) {
+async function run(line: string, shell?: Shell) {
+  shell ??= await freshShell();
   let stdout = "";
   let stderr = "";
   const status = await shell.run(line, {
@@ -42,8 +43,8 @@ describe("builtin documentation", () => {
 
   const examples = builtins.flatMap((b) => (b.examples ?? []).map((e) => [b.name, e.command] as const));
 
-  test.each(examples)("%s example parses and uses real commands: %s", (_, command) => {
-    const shell = freshShell();
+  test.each(examples)("%s example parses and uses real commands: %s", async (_, command) => {
+    const shell = await freshShell();
     for (const name of commandNames(command)) {
       expect(shell.resolveCommand(name).kind).not.toBe("error");
     }
@@ -90,7 +91,7 @@ describe("man", () => {
   });
 
   test("script pages come from the leading comment block", async () => {
-    const shell = freshShell();
+    const shell = await freshShell();
     shell.fs.writeFile("/bin/greet", "#!/bin/onno\n# say hello to someone\n# Usage: greet NAME\n#\n# Prints a greeting.\necho hello $1\n# not part of the docs\n");
     const { stdout } = await run("man greet", shell);
     expect(stdout).toContain("       greet - say hello to someone\n");
@@ -101,7 +102,7 @@ describe("man", () => {
   });
 
   test("undocumented scripts say so", async () => {
-    const shell = freshShell();
+    const shell = await freshShell();
     shell.fs.writeFile("/bin/bare", "echo hi\n");
     expect((await run("man bare", shell)).stdout).toContain("bare - (no description");
   });

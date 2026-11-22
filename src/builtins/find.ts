@@ -81,7 +81,7 @@ function baseName(display: string): string {
 }
 
 function sizeOf(node: FsNode): number {
-  return node.type === "file" ? new TextEncoder().encode(node.content).length : 0;
+  return node.type === "file" ? node.size : 0;
 }
 
 interface Plan {
@@ -154,7 +154,7 @@ function compile(tokens: string[], ctx: CommandContext, state: { hadError: boole
       }
       case "-empty":
         return (e) =>
-          e.node.type === "file" ? e.node.content === "" : ctx.fs.readdir(e.abs).length === 0;
+          e.node.type === "file" ? e.node.size === 0 : ctx.fs.readdir(e.abs).length === 0;
       case "-true":
         return () => true;
       case "-false":

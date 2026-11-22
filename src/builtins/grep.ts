@@ -225,12 +225,19 @@ function searchContent(
 }
 
 /** Expand operands into [display name, absolute path | null for stdin] pairs. */
-function collectInputs(ctx: CommandContext, inputs: string[], cfg: Config, error: (msg: string) => void) {
+function collectInputs(
+  ctx: CommandContext,
+  inputs: string[],
+  cfg: Config,
+  error: (msg: string) => void,
+  implicitDot: boolean,
+) {
   const files: { name: string; abs: string | null }[] = [];
   const walk = (name: string, abs: string) => {
     for (const child of ctx.fs.readdir(abs)) {
       const childAbs = path.join(abs, child);
-      const childName = name === "." ? child : name.endsWith("/") ? name + child : `${name}/${child}`;
+      // GNU grep: `grep -r x` prints "file", `grep -r x .` prints "./file".
+      const childName = implicitDot && name === "." ? child : name.endsWith("/") ? name + child : `${name}/${child}`;
       if (ctx.fs.isDir(childAbs)) walk(childName, childAbs);
       else files.push({ name: childName, abs: childAbs });
     }
@@ -285,8 +292,9 @@ export const grep: Builtin = {
       if (!config.noMessages) ctx.stderr(`grep: ${msg}\n`);
     };
 
-    if (!inputs.length) inputs = [config.recursive ? "." : "-"];
-    const files = collectInputs(ctx, inputs, config, error);
+    const implicit = !inputs.length;
+    if (implicit) inputs = [config.recursive ? "." : "-"];
+    const files = collectInputs(ctx, inputs, config, error, implicit);
     // Like GNU grep, decided by the operands given, not by how many files were found.
     const showNames = config.withFilename ?? (inputs.length > 1 || config.recursive);
 
@@ -300,7 +308,13 @@ export const grep: Builtin = {
         error(`${file.name}: ${err.message}`);
         continue;
       }
-      if (searchContent(content, file.name, showNames ? file.name : null, config, ctx.stdout) > 0) {
+      // Like GNU grep, don't print lines from binary files; just say whether they match.
+      const binary = file.abs !== null && ctx.fs.isBinary(file.abs);
+      const listsOnly = config.quiet || config.count || config.filesWith || config.filesWithout;
+      const out = binary && !listsOnly ? () => {} : ctx.stdout;
+      const count = searchContent(content, file.name, showNames ? file.name : null, config, out);
+      if (binary && !listsOnly && count > 0) ctx.stdout(`grep: ${file.name}: binary file matches\n`);
+      if (count > 0) {
         matched = true;
         if (config.quiet) return 0;
       }

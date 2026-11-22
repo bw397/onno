@@ -1,7 +1,7 @@
 # onno
 
 A command-line interface in the browser. A small shell parses each line and runs
-builtin commands or script files from a virtual disk stored in `localStorage`.
+builtin commands or script files from a virtual disk stored in the browser's IndexedDB.
 
 ```bash
 bun install
@@ -16,7 +16,7 @@ bun check      # typecheck
 | --------------- | -------------------------------------------------------------------- |
 | `src/shell/`    | Lexer, parser (AST), and `Shell` executor                            |
 | `src/builtins/` | One file per builtin (`cat`, `cd`, `curl`, `df`, `echo`, `find`, `grep`, `ls`, `man`, `mkdir`, `pwd`, `rm`) + registry in `index.ts`   |
-| `src/fs/`       | `VirtualFS` (localStorage-backed), path helpers, initial disk seed   |
+| `src/fs/`       | `VirtualFS` (in memory, saved to IndexedDB), backends, path helpers, seed |
 | `src/settings/` | Settings context (theme, font size; persisted) + top-right menu      |
 | `src/terminal/` | Terminal UI component                                                |
 | `src/upload/`   | Upload button (top right) + logic to copy local files onto the disk  |
@@ -52,8 +52,13 @@ Scripts on disk get a man page from the `#` comment block at their top.
 
 ## Storage keys
 
-- `onno:fs:v1`: the disk (one JSON blob). Delete it to reset the disk to the seed.
-- `onno:settings`: UI settings.
+The disk is the IndexedDB database `onno`, object store `nodes`: one record per path,
+holding text (a string) or binary (a `Uint8Array`) content. Delete the database
+(browser devtools → Application → IndexedDB) to reset the disk to the seed.
+
+`onno:settings` in localStorage holds the UI settings. Older versions kept the disk
+in localStorage under `onno:fs:v1`; it's moved into IndexedDB on first load, then
+removed.
 
 ## curl
 
@@ -66,10 +71,13 @@ deployment can't fetch `http://` URLs (mixed content). Ctrl+C interrupts a reque
 ## Uploading
 
 The upload button (top right) copies files from your machine into the shell's
-current directory. Existing files are never overwritten (`notes.txt` becomes
-`notes-1.txt`). Only UTF-8 text is accepted, since the disk stores text. Storage
-is limited by the browser's localStorage quota (typically ~5 MB); a write that
-doesn't fit fails with "No space left on device" and changes nothing.
+current directory. Text and binary files are both stored exactly. Existing files
+are never overwritten (`notes.txt` becomes `notes-1.txt`). Space is limited by the
+browser's storage quota for the site, usually a large share of free disk space (see
+`df`). A file that doesn't fit fails on its own with "No space left on device".
+
+Binary files survive storage, `ls -l`, `curl -o` and `curl --data-binary @file`,
+but pipes and `>` are text: `cat image.png > copy.png` corrupts the copy.
 
 ## Option parsing
 
@@ -88,8 +96,7 @@ Builtins can run other commands with `shell.runArgv(argv, io)`.
 
 ## df
 
-Browsers have no API for localStorage usage or quota, so `df` measures them:
-used is the exact character count of every key and value; the quota is found once
-per session by binary-searching the largest value a temporary probe key can store
-(~10 ms in Chromium, ~200 ms in Firefox; both report 5 MiB). Sizes are characters,
-which is one byte each for ASCII text. `df -v` shows how much of it is the disk.
+`df` reports the browser's own figures (`navigator.storage.estimate()`): usage for
+everything the site stores, and its quota. `df -v` adds the disk's own size and
+whether the browser treats the storage as persistent or may evict it under pressure.
+

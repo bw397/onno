@@ -1,19 +1,21 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { createBuiltinRegistry } from "../builtins";
-import { MemoryStore, VirtualFS } from "../fs";
+import { MemoryBackend, VirtualFS } from "../fs";
 import { Shell } from "./Shell";
 
-let store: MemoryStore;
+let backend: MemoryBackend;
 let fs: VirtualFS;
 let shell: Shell;
 
-beforeEach(() => {
-  store = new MemoryStore();
-  fs = new VirtualFS(store, "test", (f) => {
-    f.mkdir("/home/user", { recursive: true });
-    f.mkdir("/bin");
-    f.writeFile("/home/user/a.txt", "alpha\n");
-    f.writeFile("/home/user/b.txt", "beta\n");
+beforeEach(async () => {
+  backend = new MemoryBackend();
+  fs = await VirtualFS.open(backend, {
+    seed: (f) => {
+      f.mkdir("/home/user", { recursive: true });
+      f.mkdir("/bin");
+      f.writeFile("/home/user/a.txt", "alpha\n");
+      f.writeFile("/home/user/b.txt", "beta\n");
+    },
   });
   shell = new Shell(fs, createBuiltinRegistry());
 });
@@ -59,17 +61,20 @@ describe("Shell", () => {
   });
 
   test("output that doesn't fit in storage is an error, not a crash", async () => {
-    const tiny = new VirtualFS(new MemoryStore(1000), "q", (f) => {
-      f.mkdir("/home/user", { recursive: true });
-      f.writeFile("/home/user/big", "x".repeat(300));
+    const tiny = await VirtualFS.open(new MemoryBackend(1000), {
+      seed: (f) => {
+        f.mkdir("/home/user", { recursive: true });
+        f.writeFile("/home/user/big", "x".repeat(300));
+      },
     });
     const sh = new Shell(tiny, createBuiltinRegistry());
     let stderr = "";
-    // The empty out.txt fits, but 900 more characters don't.
-    const status = await sh.run("cat big big big > out.txt", { stdout: () => {}, stderr: (s) => void (stderr += s) });
-    expect(status).toBe(1);
-    expect(stderr).toBe("onno: /home/user/out.txt: No space left on device (browser storage is full)\n");
-    expect(tiny.readFile("/home/user/out.txt")).toBe(""); // truncated, then the write was rolled back
+    // 900 more bytes don't fit.
+    const status = await sh.run("cat big big big > out.txt && echo next", { stdout: () => {}, stderr: (s) => void (stderr += s) });
+    expect(status).toBe(1); // && short-circuited on the failed save
+    expect(stderr).toBe("onno: No space left on device (browser storage is full)\n");
+    expect(tiny.exists("/home/user/out.txt")).toBe(false); // the whole command's changes were rolled back
+    expect(tiny.hasPendingChanges).toBe(false);
   });
 
   test("redirect to a missing directory fails before running", async () => {
@@ -117,10 +122,13 @@ describe("Shell", () => {
     expect(() => shell.setCwd("/home/user/a.txt")).toThrow("Not a directory");
   });
 
-  test("disk persists across instances", async () => {
-    await run("cat a.txt > keep.txt");
-    const reopened = new VirtualFS(store, "test");
+  test("each command's changes are saved when it finishes", async () => {
+    await run("cat a.txt > keep.txt; mkdir d; rm b.txt");
+    expect(fs.hasPendingChanges).toBe(false);
+    const reopened = await VirtualFS.open(backend);
     expect(reopened.readFile("/home/user/keep.txt")).toBe("alpha\n");
+    expect(reopened.isDir("/home/user/d")).toBe(true);
+    expect(reopened.exists("/home/user/b.txt")).toBe(false);
   });
 });
 

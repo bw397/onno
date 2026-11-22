@@ -1,19 +1,21 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { MemoryStore, VirtualFS } from "../fs";
+import { MemoryBackend, VirtualFS } from "../fs";
 import { Shell } from "../shell";
 import { createBuiltinRegistry } from ".";
 import { OptionError, parseOptions } from "./options";
 
 let shell: Shell;
 
-beforeEach(() => {
-  const fs = new VirtualFS(new MemoryStore(), "test", (f) => {
-    f.mkdir("/home/user/src/lib", { recursive: true });
-    f.writeFile("/home/user/fruit.txt", "apple\nBanana\ncherry\napple pie\npineapple\n");
-    f.writeFile("/home/user/nums.txt", "one 1\ntwo 22\nthree\nfour 4444\n");
-    f.writeFile("/home/user/src/main.js", "import x\n// TODO: fix\nconsole.log(x)\n");
-    f.writeFile("/home/user/src/lib/util.js", "export const a = 1; // TODO\n");
-    f.writeFile("/home/user/lines.txt", ["a", "b", "MATCH 1", "c", "d", "e", "f", "MATCH 2", "g"].join("\n"));
+beforeEach(async () => {
+  const fs = await VirtualFS.open(new MemoryBackend(), {
+    seed: (f) => {
+      f.mkdir("/home/user/src/lib", { recursive: true });
+      f.writeFile("/home/user/fruit.txt", "apple\nBanana\ncherry\napple pie\npineapple\n");
+      f.writeFile("/home/user/nums.txt", "one 1\ntwo 22\nthree\nfour 4444\n");
+      f.writeFile("/home/user/src/main.js", "import x\n// TODO: fix\nconsole.log(x)\n");
+      f.writeFile("/home/user/src/lib/util.js", "export const a = 1; // TODO\n");
+      f.writeFile("/home/user/lines.txt", ["a", "b", "MATCH 1", "c", "d", "e", "f", "MATCH 2", "g"].join("\n"));
+    },
   });
   shell = new Shell(fs, createBuiltinRegistry());
 });
@@ -103,6 +105,7 @@ describe("grep inputs", () => {
     expect(await out("grep -r TODO src")).toBe("src/lib/util.js:export const a = 1; // TODO\nsrc/main.js:// TODO: fix\n");
     expect(await out("grep -rh TODO src/")).toBe("export const a = 1; // TODO\n// TODO: fix\n");
     expect(await out("cd src; grep -rl TODO")).toBe("lib/util.js\nmain.js\n");
+    expect(await out("grep -rl TODO .")).toBe("./lib/util.js\n./main.js\n"); // still in src
   });
 
   test("errors: missing files and directories (exit 2, -s silences)", async () => {
@@ -119,6 +122,20 @@ describe("grep inputs", () => {
     expect((await run("grep -q kiwi fruit.txt")).status).toBe(1);
     expect((await run("grep -qs apple missing fruit.txt")).status).toBe(0);
     expect(await out("grep -q cherry fruit.txt && echo found")).toBe("found\n");
+  });
+});
+
+describe("grep binary files", () => {
+  test("reports a match instead of printing bytes; counts and lists still work", async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0x41, 0x42, 0x43, 0x0a]);
+    shell.fs.writeFile("/home/user/img.png", bytes);
+    // Wording and stream (stdout) match GNU grep 3.12.
+    expect(await run("grep ABC img.png")).toEqual({ stdout: "grep: img.png: binary file matches\n", stderr: "", status: 0 });
+    expect((await run("grep XYZ img.png")).status).toBe(1);
+    expect(await out("grep -c ABC img.png")).toBe("1\n");
+    expect(await out("grep -l ABC img.png fruit.txt")).toBe("img.png\n");
+    expect(await out("grep -r ABC .")).toBe("grep: ./img.png: binary file matches\n");
+    expect(await out("grep -r ABC")).toBe("grep: img.png: binary file matches\n");
   });
 });
 

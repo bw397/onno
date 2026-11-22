@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { MemoryStore, VirtualFS } from "../fs";
+import { MemoryBackend, VirtualFS } from "../fs";
 import { Shell } from "../shell";
 import { createBuiltinRegistry } from ".";
 import { globToRegex } from "./find";
@@ -7,16 +7,18 @@ import { globToRegex } from "./find";
 let fs: VirtualFS;
 let shell: Shell;
 
-beforeEach(() => {
-  fs = new VirtualFS(new MemoryStore(), "test", (f) => {
-    f.mkdir("/home/user/proj/src/lib", { recursive: true });
-    f.mkdir("/home/user/proj/node_modules/dep", { recursive: true });
-    f.mkdir("/home/user/proj/empty");
-    f.writeFile("/home/user/proj/README.md", "# proj\n");
-    f.writeFile("/home/user/proj/src/main.js", "x".repeat(2000));
-    f.writeFile("/home/user/proj/src/lib/util.js", "export {}\n");
-    f.writeFile("/home/user/proj/src/lib/Util.test.js", "");
-    f.writeFile("/home/user/proj/node_modules/dep/index.js", "module.exports = 1\n");
+beforeEach(async () => {
+  fs = await VirtualFS.open(new MemoryBackend(), {
+    seed: (f) => {
+      f.mkdir("/home/user/proj/src/lib", { recursive: true });
+      f.mkdir("/home/user/proj/node_modules/dep", { recursive: true });
+      f.mkdir("/home/user/proj/empty");
+      f.writeFile("/home/user/proj/README.md", "# proj\n");
+      f.writeFile("/home/user/proj/src/main.js", "x".repeat(2000));
+      f.writeFile("/home/user/proj/src/lib/util.js", "export {}\n");
+      f.writeFile("/home/user/proj/src/lib/Util.test.js", "");
+      f.writeFile("/home/user/proj/node_modules/dep/index.js", "module.exports = 1\n");
+    },
   });
   shell = new Shell(fs, createBuiltinRegistry(), { cwd: "/home/user/proj" });
 });

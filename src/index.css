@@ -259,3 +259,7 @@ body {
   color: var(--fg) !important;
   text-decoration: underline;
 }
+
+.terminal.loading {
+  color: var(--muted);
+}

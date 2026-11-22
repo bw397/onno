@@ -8,7 +8,7 @@ export const defaultSeed: Seed = (fs) => {
 
   fs.writeFile(
     "/etc/motd",
-    "Welcome to onno.\nYour disk lives in this browser's localStorage.\n",
+    "Welcome to onno.\nYour disk lives in this browser's IndexedDB.\n",
   );
   fs.writeFile(
     "/home/user/welcome.txt",

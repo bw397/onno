@@ -1,31 +1,57 @@
-import { useRef, useState } from "react";
+import { Suspense, use, useRef, useState } from "react";
 import { createBuiltinRegistry } from "./builtins";
-import { MemoryStore, VirtualFS, type KeyValueStore } from "./fs";
+import { IndexedDBBackend, LEGACY_STORAGE_KEY, MemoryBackend, readLegacyDisk, VirtualFS } from "./fs";
 import { SettingsMenu, SettingsProvider } from "./settings";
 import { Shell } from "./shell";
 import { Terminal, type TerminalHandle } from "./terminal/Terminal";
 import { formatSize, UploadButton, uploadFiles } from "./upload";
 import "./index.css";
 
-function browserStore(): KeyValueStore {
+interface Disk {
+  fs: VirtualFS;
+  /** Shown in the terminal at startup, e.g. when storage is unavailable. */
+  notice?: string;
+}
+
+function safeLocalStorage(): Storage | null {
   try {
-    localStorage.setItem("onno:probe", "1");
-    localStorage.removeItem("onno:probe");
-    return localStorage;
+    return globalThis.localStorage ?? null;
   } catch {
-    return new MemoryStore(); // private mode / storage disabled
+    return null; // blocked by browser settings
   }
 }
 
-function createShell(): Shell {
-  const fs = new VirtualFS(browserStore());
-  return new Shell(fs, createBuiltinRegistry());
+async function openDisk(): Promise<Disk> {
+  const storage = safeLocalStorage();
+  let migrated = false;
+  try {
+    const fs = await VirtualFS.open(await IndexedDBBackend.open(), {
+      // Bring over a disk saved by the localStorage version of the app.
+      migrate: () => (storage ? readLegacyDisk(storage) : null),
+      onMigrated: () => {
+        migrated = true;
+        storage?.removeItem(LEGACY_STORAGE_KEY);
+      },
+    });
+    return { fs, notice: migrated ? "onno: moved your disk from localStorage to IndexedDB.\n" : undefined };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return {
+      fs: await VirtualFS.open(new MemoryBackend()),
+      notice: `onno: IndexedDB is unavailable (${reason}); this session's disk won't be saved.\n`,
+    };
+  }
 }
 
-const BANNER = "onno shell. Try `cat welcome.txt` or `ls -l /`.\n";
+// Opened once per page load (and shared across StrictMode's double render).
+let diskPromise: Promise<Disk> | undefined;
+const getDisk = () => (diskPromise ??= openDisk());
 
-export function App() {
-  const [shell] = useState(createShell);
+const BANNER = "onno shell. Try `cat welcome.txt`, `ls -l /` or `man -k .`.\n";
+
+function Workspace() {
+  const disk = use(getDisk());
+  const [shell] = useState(() => new Shell(disk.fs, createBuiltinRegistry()));
   const terminal = useRef<TerminalHandle>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -34,8 +60,8 @@ export function App() {
     try {
       for (const r of await uploadFiles(shell.fs, shell.cwd, files)) {
         if (r.ok) {
-          const note = r.renamed ? " (renamed: name was taken)" : "";
-          terminal.current?.print("stdout", `upload: ${r.name} -> ${r.path} (${formatSize(r.size)})${note}\n`);
+          const notes = [formatSize(r.size), r.binary && "binary", r.renamed && "renamed: name was taken"];
+          terminal.current?.print("stdout", `upload: ${r.name} -> ${r.path} (${notes.filter(Boolean).join(", ")})\n`);
         } else {
           terminal.current?.print("stderr", `upload: ${r.name}: ${r.error}\n`);
         }
@@ -46,12 +72,22 @@ export function App() {
   };
 
   return (
-    <SettingsProvider>
+    <>
       <div className="toolbar">
         <UploadButton onFiles={onFiles} disabled={uploading} />
         <SettingsMenu />
       </div>
-      <Terminal ref={terminal} shell={shell} banner={BANNER} />
+      <Terminal ref={terminal} shell={shell} banner={BANNER + (disk.notice ?? "")} />
+    </>
+  );
+}
+
+export function App() {
+  return (
+    <SettingsProvider>
+      <Suspense fallback={<div className="terminal loading">Loading disk…</div>}>
+        <Workspace />
+      </Suspense>
     </SettingsProvider>
   );
 }

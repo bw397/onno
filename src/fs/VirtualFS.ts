@@ -1,10 +1,13 @@
+import { MemoryBackend, nodeSize, type StorageBackend } from "./backend";
+import { byteLength, concat, toBytes, toText, type FileContent } from "./content";
 import { basename, dirname, normalize } from "./path";
-import { isEnumerable, measureStorage, usedChars, type EnumerableStore, type StorageUsage } from "./quota";
 import { defaultSeed, type Seed } from "./seed";
 
 export interface FileNode {
   type: "file";
-  content: string;
+  content: FileContent;
+  /** Size in bytes (UTF-8 for text). */
+  size: number;
   mtime: number;
 }
 
@@ -15,13 +18,7 @@ export interface DirNode {
 
 export type FsNode = FileNode | DirNode;
 
-/** The subset of the Web Storage API the filesystem needs. */
-export interface KeyValueStore {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-}
-
-export type FsErrorCode = "ENOENT" | "ENOTDIR" | "EISDIR" | "EEXIST" | "ENOTEMPTY" | "EINVAL" | "ENOSPC";
+export type FsErrorCode = "ENOENT" | "ENOTDIR" | "EISDIR" | "EEXIST" | "ENOTEMPTY" | "EINVAL" | "ENOSPC" | "EIO";
 
 const MESSAGES: Record<FsErrorCode, string> = {
   ENOENT: "No such file or directory",
@@ -31,6 +28,7 @@ const MESSAGES: Record<FsErrorCode, string> = {
   ENOTEMPTY: "Directory not empty",
   EINVAL: "Invalid argument",
   ENOSPC: "No space left on device (browser storage is full)",
+  EIO: "Input/output error",
 };
 
 export class FsError extends Error {
@@ -38,71 +36,79 @@ export class FsError extends Error {
   constructor(
     public readonly code: FsErrorCode,
     public readonly path: string,
+    detail?: string,
   ) {
-    super(MESSAGES[code]);
+    super(detail ? `${MESSAGES[code]}: ${detail}` : MESSAGES[code]);
   }
 }
 
-/**
- * In-memory store, used for tests or when localStorage is unavailable. Mirrors the
- * Web Storage API, including an optional quota (in characters of keys + values)
- * that throws QuotaExceededError like a full localStorage.
- */
-export class MemoryStore implements EnumerableStore {
-  private data = new Map<string, string>();
-  constructor(private readonly quota = Infinity) {}
-  get length() {
-    return this.data.size;
-  }
-  key(index: number) {
-    return [...this.data.keys()][index] ?? null;
-  }
-  getItem(key: string) {
-    return this.data.get(key) ?? null;
-  }
-  setItem(key: string, value: string) {
-    const current = this.data.get(key);
-    const used = usedChars(this) - (current === undefined ? 0 : key.length + current.length);
-    if (used + key.length + value.length > this.quota) {
-      throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
-    }
-    this.data.set(key, value);
-  }
-  removeItem(key: string) {
-    this.data.delete(key);
-  }
+export interface StorageUsage {
+  /** Bytes used by this site, as reported by the browser (or the disk size if it can't say). */
+  used: number;
+  /** Bytes available to this site in total (Infinity if unknown or unlimited). */
+  quota: number;
+  available: number;
+  /** Approximate bytes taken by the disk itself. */
+  disk: number;
+  /** Number of files and directories. */
+  entries: number;
+  /** False for the in-memory fallback: nothing survives a reload. */
+  durable: boolean;
+  /** Whether the browser promised not to evict the data; null if unknown. */
+  persisted: boolean | null;
 }
 
-export const DEFAULT_STORAGE_KEY = "onno:fs:v1";
+export interface OpenOptions {
+  /** Populates a brand-new disk (default: defaultSeed). */
+  seed?: Seed;
+  /** Returns an older disk to import into a brand-new one, instead of seeding. */
+  migrate?: () => Map<string, FsNode> | null;
+  /** Called after a migrated disk has been saved, e.g. to delete the old copy. */
+  onMigrated?: () => void;
+}
 
 /**
- * A flat path -> node map persisted as a single JSON blob in a KeyValueStore
- * (localStorage in the browser). Every mutation is written through immediately.
+ * The disk. Everything lives in memory, so the API is synchronous; changes are queued
+ * and saved to the backend (IndexedDB in the browser) by flush(), which the shell calls
+ * after every command. If saving fails, the queued changes are undone in memory too, so
+ * memory always matches what's stored.
  */
 export class VirtualFS {
   private nodes = new Map<string, FsNode>();
+  /** Changes since the last flush (null = deleted). */
+  private pending = new Map<string, FsNode | null>();
+  /** Each pending path's value before this batch (undefined = didn't exist), for rollback. */
+  private previous = new Map<string, FsNode | undefined>();
 
-  constructor(
-    private readonly store: KeyValueStore = new MemoryStore(),
-    private readonly storageKey: string = DEFAULT_STORAGE_KEY,
-    seed: Seed = defaultSeed,
-  ) {
-    if (!this.load()) {
-      this.nodes.set("/", { type: "dir", mtime: Date.now() });
-      seed(this);
-      this.persist();
+  private constructor(readonly backend: StorageBackend) {}
+
+  /** Load the disk from `backend`; a new, empty one is migrated or seeded and saved. */
+  static async open(backend: StorageBackend = new MemoryBackend(), opts: OpenOptions = {}): Promise<VirtualFS> {
+    const fs = new VirtualFS(backend);
+    const loaded = await backend.loadAll();
+    if (loaded.size) {
+      fs.nodes = loaded;
+      if (loaded.get("/")?.type !== "dir") fs.set("/", { type: "dir", mtime: Date.now() });
+      await fs.flush();
+      return fs;
     }
+
+    fs.set("/", { type: "dir", mtime: Date.now() });
+    const legacy = opts.migrate?.();
+    if (legacy) {
+      // Sorted, so parents come before children.
+      for (const path of [...legacy.keys()].sort()) {
+        if (path !== "/") fs.set(path, legacy.get(path)!);
+      }
+    } else {
+      (opts.seed ?? defaultSeed)(fs);
+    }
+    await fs.flush();
+    if (legacy) opts.onMigrated?.();
+    return fs;
   }
 
-  /**
-   * Usage of the underlying store, plus how much of it is this disk. Null if the store
-   * can't be enumerated. The first call may probe the quota (see quota.ts).
-   */
-  storageUsage(): (StorageUsage & { disk: number; entries: number }) | null {
-    if (!isEnumerable(this.store)) return null;
-    const blob = this.store.getItem(this.storageKey) ?? "";
-    return { ...measureStorage(this.store), disk: this.storageKey.length + blob.length, entries: this.nodes.size };
-  }
+  // ---- reading -----------------------------------------------------------
 
   stat(path: string): FsNode | null {
     return this.nodes.get(normalize(path)) ?? null;
@@ -116,41 +122,19 @@ export class VirtualFS {
     return this.stat(path)?.type === "dir";
   }
 
+  /** True for a file stored as bytes (not valid UTF-8 text). */
+  isBinary(path: string): boolean {
+    const node = this.stat(path);
+    return node?.type === "file" && typeof node.content !== "string";
+  }
+
+  /** File content as text (binary content is decoded as UTF-8, lossily). */
   readFile(path: string): string {
-    const p = normalize(path);
-    const node = this.nodes.get(p);
-    if (!node) throw new FsError("ENOENT", p);
-    if (node.type === "dir") throw new FsError("EISDIR", p);
-    return node.content;
+    return toText(this.fileNode(path).content);
   }
 
-  writeFile(path: string, content: string, opts: { append?: boolean } = {}): void {
-    const p = normalize(path);
-    this.commit(() => {
-      if (p === "/") throw new FsError("EISDIR", p);
-      this.requireParentDir(p);
-      const existing = this.nodes.get(p);
-      if (existing?.type === "dir") throw new FsError("EISDIR", p);
-      const prev = opts.append && existing ? existing.content : "";
-      this.nodes.set(p, { type: "file", content: prev + content, mtime: Date.now() });
-    });
-  }
-
-  mkdir(path: string, opts: { recursive?: boolean } = {}): void {
-    const p = normalize(path);
-    this.commit(() => {
-      const existing = this.nodes.get(p);
-      if (existing) {
-        if (opts.recursive && existing.type === "dir") return;
-        throw new FsError("EEXIST", p);
-      }
-      if (opts.recursive) {
-        const parent = dirname(p);
-        if (!this.nodes.has(parent)) this.mkdir(parent, opts);
-      }
-      this.requireParentDir(p);
-      this.nodes.set(p, { type: "dir", mtime: Date.now() });
-    });
+  readBytes(path: string): Uint8Array {
+    return toBytes(this.fileNode(path).content);
   }
 
   /** Names (not paths) of the entries in a directory, sorted. */
@@ -166,42 +150,121 @@ export class VirtualFS {
     return names.sort();
   }
 
-  remove(path: string, opts: { recursive?: boolean } = {}): void {
+  // ---- writing (validate first, then apply, so a failed call changes nothing) ----
+
+  writeFile(path: string, content: FileContent, opts: { append?: boolean } = {}): void {
     const p = normalize(path);
-    this.commit(() => {
-      if (p === "/") throw new FsError("EINVAL", p);
-      const node = this.nodes.get(p);
-      if (!node) throw new FsError("ENOENT", p);
-      if (node.type === "dir") {
-        const prefix = p + "/";
-        const children = [...this.nodes.keys()].filter((k) => k.startsWith(prefix));
-        if (children.length && !opts.recursive) throw new FsError("ENOTEMPTY", p);
-        for (const k of children) this.nodes.delete(k);
-      }
-      this.nodes.delete(p);
-    });
+    if (p === "/") throw new FsError("EISDIR", p);
+    this.requireParentDir(p);
+    const existing = this.nodes.get(p);
+    if (existing?.type === "dir") throw new FsError("EISDIR", p);
+    const data = opts.append && existing ? concat(existing.content, content) : content;
+    this.set(p, { type: "file", content: data, size: byteLength(data), mtime: Date.now() });
   }
 
-  private commitDepth = 0;
+  mkdir(path: string, opts: { recursive?: boolean } = {}): void {
+    const p = normalize(path);
+    const existing = this.nodes.get(p);
+    if (existing) {
+      if (opts.recursive && existing.type === "dir") return;
+      throw new FsError("EEXIST", p);
+    }
+    if (!opts.recursive) {
+      this.requireParentDir(p);
+      this.set(p, { type: "dir", mtime: Date.now() });
+      return;
+    }
+    // Check every ancestor before creating any of them.
+    const missing: string[] = [];
+    for (let dir = p; !this.nodes.has(dir); dir = dirname(dir)) missing.unshift(dir);
+    const deepestExisting = dirname(missing[0]!);
+    if (this.nodes.get(deepestExisting)?.type !== "dir") throw new FsError("ENOTDIR", deepestExisting);
+    for (const dir of missing) this.set(dir, { type: "dir", mtime: Date.now() });
+  }
+
+  remove(path: string, opts: { recursive?: boolean } = {}): void {
+    const p = normalize(path);
+    if (p === "/") throw new FsError("EINVAL", p);
+    const node = this.nodes.get(p);
+    if (!node) throw new FsError("ENOENT", p);
+    if (node.type === "dir") {
+      const prefix = p + "/";
+      const children = [...this.nodes.keys()].filter((k) => k.startsWith(prefix));
+      if (children.length && !opts.recursive) throw new FsError("ENOTEMPTY", p);
+      for (const k of children) this.set(k, null);
+    }
+    this.set(p, null);
+  }
+
+  // ---- persistence -------------------------------------------------------
+
+  get hasPendingChanges(): boolean {
+    return this.pending.size > 0;
+  }
 
   /**
-   * Run a mutation and persist it. If anything throws (including the store being
-   * full), the in-memory tree is restored so memory and storage never disagree.
-   * Nested calls (e.g. recursive mkdir) join the outermost commit.
+   * Save queued changes in one atomic commit. On failure, undo them in memory and throw
+   * FsError (ENOSPC when storage is full, EIO otherwise).
    */
-  private commit(mutate: () => void): void {
-    if (this.commitDepth > 0) return mutate();
-    const snapshot = new Map(this.nodes);
-    this.commitDepth++;
+  async flush(): Promise<void> {
+    if (!this.pending.size) return;
+    const changes = this.pending;
+    const previous = this.previous;
+    this.pending = new Map();
+    this.previous = new Map();
+
     try {
-      mutate();
-      this.persist();
+      await this.backend.commit(changes);
     } catch (err) {
-      this.nodes = snapshot;
-      throw err;
-    } finally {
-      this.commitDepth--;
+      for (const [path, node] of changes) {
+        const prev = previous.get(path);
+        if ((this.nodes.get(path) ?? null) !== node) {
+          // Changed again while the commit was in flight: keep the newer value, but make
+          // its rollback point the last saved value rather than the one that just failed.
+          if (this.previous.has(path) && (this.previous.get(path) ?? null) === node) this.previous.set(path, prev);
+          continue;
+        }
+        if (prev === undefined) this.nodes.delete(path);
+        else this.nodes.set(path, prev);
+      }
+      const name = (err as { name?: string } | null)?.name;
+      if (name === "QuotaExceededError") throw new FsError("ENOSPC", "/");
+      throw new FsError("EIO", "/", err instanceof Error ? err.message : String(err));
     }
+  }
+
+  async storageUsage(): Promise<StorageUsage> {
+    let disk = 0;
+    for (const [path, node] of this.nodes) disk += nodeSize(path, node);
+    const [estimate, persisted] = await Promise.all([this.backend.estimate(), this.backend.persisted()]);
+    const used = estimate?.usage ?? disk;
+    const quota = estimate?.quota ?? Infinity;
+    return {
+      used,
+      quota,
+      available: Math.max(0, quota - used),
+      disk,
+      entries: this.nodes.size,
+      durable: this.backend.durable,
+      persisted,
+    };
+  }
+
+  // ---- internals ---------------------------------------------------------
+
+  private fileNode(path: string): FileNode {
+    const p = normalize(path);
+    const node = this.nodes.get(p);
+    if (!node) throw new FsError("ENOENT", p);
+    if (node.type === "dir") throw new FsError("EISDIR", p);
+    return node;
+  }
+
+  private set(path: string, node: FsNode | null): void {
+    if (!this.previous.has(path)) this.previous.set(path, this.nodes.get(path));
+    this.pending.set(path, node);
+    if (node) this.nodes.set(path, node);
+    else this.nodes.delete(path);
   }
 
   private requireParentDir(path: string) {
@@ -209,27 +272,5 @@ export class VirtualFS {
     const node = this.nodes.get(parent);
     if (!node) throw new FsError("ENOENT", parent);
     if (node.type !== "dir") throw new FsError("ENOTDIR", parent);
-  }
-
-  private load(): boolean {
-    try {
-      const raw = this.store.getItem(this.storageKey);
-      if (!raw) return false;
-      const data = JSON.parse(raw) as Record<string, FsNode>;
-      if (data["/"]?.type !== "dir") return false;
-      this.nodes = new Map(Object.entries(data));
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  private persist() {
-    try {
-      this.store.setItem(this.storageKey, JSON.stringify(Object.fromEntries(this.nodes)));
-    } catch {
-      // localStorage throws QuotaExceededError when full
-      throw new FsError("ENOSPC", "/");
-    }
   }
 }

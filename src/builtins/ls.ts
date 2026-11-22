@@ -20,7 +20,7 @@ function format(entries: Entry[], long: boolean): string {
   const label = (e: Entry) => (e.node.type === "dir" ? `${e.name}/` : e.name);
   if (!long) return entries.map(label).join("  ") + "\n";
 
-  const size = (e: Entry) => (e.node.type === "file" ? String(e.node.content.length) : "-");
+  const size = (e: Entry) => (e.node.type === "file" ? String(e.node.size) : "-");
   const width = Math.max(...entries.map((e) => size(e).length));
   return entries
     .map((e) => `${e.node.type === "dir" ? "d" : "-"}  ${size(e).padStart(width)}  ${formatDate(e.node.mtime)}  ${label(e)}\n`)
