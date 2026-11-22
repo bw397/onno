@@ -39,6 +39,15 @@ export type Script = AndOrList[];
 
 // ---- Execution ----------------------------------------------------------
 
+/**
+ * Services the surrounding app offers commands (an editor, ...). Absent in tests and
+ * headless use, so commands must check for it.
+ */
+export interface ShellHost {
+  /** Open an absolute path in the editor. Returns an error message if it can't. */
+  openEditor(path: string): string | null;
+}
+
 export interface IO {
   stdout(text: string): void;
   stderr(text: string): void;

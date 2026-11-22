@@ -1,7 +1,7 @@
 import { FsError, path, type VirtualFS } from "../fs";
 import { ParseError } from "./lexer";
 import { parse } from "./parser";
-import type { AndOrList, Builtin, ExitStatus, IO, Pipeline, SimpleCommand, Word } from "./types";
+import type { AndOrList, Builtin, ExitStatus, IO, Pipeline, ShellHost, SimpleCommand, Word } from "./types";
 
 const MAX_SCRIPT_DEPTH = 32;
 /** Exit status for a command interrupted by Ctrl+C (128 + SIGINT). */
@@ -10,6 +10,7 @@ export const INTERRUPTED = 130;
 export interface ShellOptions {
   cwd?: string;
   env?: Record<string, string>;
+  host?: ShellHost;
 }
 
 type Resolution =
@@ -25,6 +26,8 @@ type Resolution =
 export class Shell {
   readonly env: Record<string, string>;
   lastStatus: ExitStatus = 0;
+  /** UI services from the app, if any (see ShellHost). */
+  host: ShellHost | undefined;
   private _cwd: string;
   /** Positional parameter frames ($0, $1, ...) for running scripts. */
   private positional: string[][] = [["onno"]];
@@ -35,6 +38,7 @@ export class Shell {
     opts: ShellOptions = {},
   ) {
     this.env = { HOME: "/home/user", USER: "user", PATH: "/bin", ...opts.env };
+    this.host = opts.host;
     this._cwd = "/";
     this.setCwd(opts.cwd ?? this.env.HOME!);
   }

@@ -36,12 +36,12 @@ describe("command completion", () => {
   });
 
   test("includes scripts on $PATH", () => {
-    expect(tab("mo").line).toBe("motd ");
+    expect(tab("mot").line).toBe("motd ");
   });
 
   test("ambiguous: common prefix, then candidates", () => {
-    expect(tab("m").line).toBe("m"); // man, mkdir, mkthing, motd share only "m"
-    expect(tab("m").candidates).toEqual(["man", "mkdir", "mkthing", "motd"]);
+    expect(tab("m").line).toBe("m"); // man, mkdir, mkthing, mon, motd share only "m"
+    expect(tab("m").candidates).toEqual(["man", "mkdir", "mkthing", "mon", "motd"]);
     expect(tab("mk").candidates).toEqual(["mkdir", "mkthing"]);
   });
 

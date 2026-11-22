@@ -25,8 +25,11 @@ bun run build    # production bundle into dist/
   `StorageBackend` interface + `MemoryBackend`), `idb.ts` (`IndexedDBBackend`),
   `content.ts` (text/binary helpers), `legacy.ts` (importing the old localStorage disk),
   `path.ts` and `seed.ts`.
-- `src/terminal/`, `src/settings/`, `src/upload/`: the React UI. `App.tsx` wires
-  them together.
+- `src/editor/`: the `mon` editor. `EditorPane.tsx` is the UI, `monaco.ts` is the
+  lazily imported Monaco setup, and `workers.ts` bundles Monaco's web workers
+  (server-side).
+- `src/terminal/`, `src/settings/`, `src/upload/`: the rest of the React UI. `App.tsx`
+  wires them together.
 
 ## Shell semantics (deliberately simple, keep them in mind)
 
@@ -63,6 +66,9 @@ bun run build    # production bundle into dist/
      does).
    - Commands that delete things must refuse the working directory and its parents,
      like `rm` and `find -delete` do.
+   - UI features come through `ctx.shell.host` (`ShellHost`, set by `App.tsx`). It's
+     undefined in tests and headless use, so check for it (see `mon`). Unit-test such
+     commands with a fake host.
 5. Mirror GNU behaviour where it's cheap. For grep and find, the outputs were checked
    against the system's GNU tools; keep it that way. **In Claude Code's Bash tool,
    `grep` and `find` are shell functions that run an embedded ugrep and bfs**, which
@@ -131,6 +137,31 @@ HTML first. Put such scripts in the session scratchpad, not the repo.
 - Each tab holds its own in-memory copy of the disk. Writes are per path, last writer
   wins, and other tabs don't see changes until they reload.
 
+## Monaco editor (`mon`)
+
+- `mon` validates the file and calls `shell.host.openEditor(path)`, then returns at
+  once: editing doesn't block the shell. `App.tsx` holds the open file; `EditorPane`
+  loads it, saves with `fs.writeFile` + `await fs.flush()`, and detects outside
+  changes by comparing mtimes. Only one file is open at a time.
+- Monaco is imported dynamically (`await import("./monaco")`) so it stays out of the
+  initial bundle; `bun run build` uses `--splitting` for that.
+- **Workers:** Bun's bundler leaves `new Worker(new URL("…", import.meta.url))` as a
+  `file://` URL, which the browser refuses. So `src/editor/workers.ts` bundles each
+  worker with `Bun.build`. `src/index.ts` serves them from memory at
+  `/monaco/<name>.worker.js`, and `scripts/build-workers.ts` writes them to
+  `dist/monaco/`. Import worker paths through the package's `exports` map
+  (`monaco-editor/language/json/json.worker`), not `esm/vs/…`.
+- The browser's confirm dialogs aren't used: confirmations (unsaved changes, file
+  changed on disk) live in the editor's title bar. `beforeunload` warns about unsaved
+  edits.
+- The fixed toolbar overlaps the right end of the editor title bar. The title bar
+  reserves padding for it, so keep them aligned (56px bar, toolbar centred in it).
+- **Testing Monaco in headless Chromium:** it uses the EditContext API (focused element
+  `.native-edit-context`), not a `<textarea>`. Click into `.view-lines` with
+  `Input.dispatchMouseEvent`, then type with `Input.dispatchKeyEvent` (`keyDown` with
+  `text`; Enter needs `text: "\r"`). Monaco renders spaces as U+00A0, so normalise
+  `textContent` before comparing.
+
 ## UI notes
 
 - Themes: tokens on `:root`, overridden under `:root[data-theme="light"]`. The settings
@@ -141,6 +172,7 @@ HTML first. Put such scripts in the session scratchpad, not the repo.
   or grid layouts, give it `width: 0; flex: 1` and use `minmax(0, 1fr)` columns, or it
   overflows its container. Check layout changes in both browsers.
 - The terminal disables its input while a command runs. Keys needed during a run, like
-  Ctrl+C, are caught on `window`.
+  Ctrl+C, are caught on `window`. When a command finishes, the terminal refocuses its
+  input unless focus is inside `.editor-pane`.
 - Other components write to the terminal through the `TerminalHandle` ref
   (`print(kind, text)`).

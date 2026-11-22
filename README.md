@@ -15,10 +15,11 @@ bun check      # typecheck
 | Path            | What                                                                 |
 | --------------- | -------------------------------------------------------------------- |
 | `src/shell/`    | Lexer, parser (AST), and `Shell` executor                            |
-| `src/builtins/` | One file per builtin (`cat`, `cd`, `curl`, `df`, `echo`, `find`, `grep`, `ls`, `man`, `mkdir`, `pwd`, `rm`) + registry in `index.ts`   |
+| `src/builtins/` | One file per builtin (`cat`, `cd`, `curl`, `df`, `echo`, `find`, `grep`, `ls`, `man`, `mkdir`, `mon`, `pwd`, `rm`) + registry in `index.ts`   |
 | `src/fs/`       | `VirtualFS` (in memory, saved to IndexedDB), backends, path helpers, seed |
 | `src/settings/` | Settings context (theme, font size; persisted) + top-right menu      |
 | `src/terminal/` | Terminal UI component                                                |
+| `src/editor/`   | Monaco editor pane for `mon`, Monaco setup, worker bundling           |
 | `src/upload/`   | Upload button (top right) + logic to copy local files onto the disk  |
 
 ## Shell syntax
@@ -100,3 +101,16 @@ Builtins can run other commands with `shell.runArgv(argv, io)`.
 everything the site stores, and its quota. `df -v` adds the disk's own size and
 whether the browser treats the storage as persistent or may evict it under pressure.
 
+
+## mon (Monaco editor)
+
+`mon FILE` opens FILE in Monaco (the VS Code editor) in the top 80% of the screen; the
+terminal stays usable in the bottom 20%. Ctrl+S or the title bar's Save writes the file
+to the disk; the close button asks first if there are unsaved changes. Saving over a
+file that changed on disk since it was opened asks whether to overwrite or reload.
+
+Monaco (~4 MB) is loaded only the first time `mon` runs. Its web workers (language
+services) are bundled separately, because Bun's bundler doesn't follow
+`new Worker(new URL(...))`: the server builds them at startup (~0.4 s) and serves them
+at `/monaco/*.worker.js`, and `bun run build` writes them to `dist/monaco/`. Monaco's
+CSS (~190 KB) ends up in the main stylesheet.

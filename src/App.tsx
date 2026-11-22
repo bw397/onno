@@ -1,9 +1,10 @@
-import { Suspense, use, useRef, useState } from "react";
+import { Suspense, use, useCallback, useEffect, useRef, useState } from "react";
+import { EditorPane } from "./editor/EditorPane";
 import { createBuiltinRegistry } from "./builtins";
 import { IndexedDBBackend, LEGACY_STORAGE_KEY, MemoryBackend, readLegacyDisk, VirtualFS } from "./fs";
 import { SettingsMenu, SettingsProvider } from "./settings";
 import { Shell } from "./shell";
-import { Terminal, type TerminalHandle } from "./terminal/Terminal";
+import { tildePath, Terminal, type TerminalHandle } from "./terminal/Terminal";
 import { formatSize, UploadButton, uploadFiles } from "./upload";
 import "./index.css";
 
@@ -55,6 +56,40 @@ function Workspace() {
   const terminal = useRef<TerminalHandle>(null);
   const [uploading, setUploading] = useState(false);
 
+  // The file open in the editor, if any. `token` changes to re-focus it.
+  const [editing, setEditing] = useState<{ path: string; token: number } | null>(null);
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  const dirtyRef = useRef(false);
+
+  // Let `mon` open the editor.
+  useEffect(() => {
+    shell.host = {
+      openEditor(path) {
+        const current = editingRef.current;
+        if (current && current.path !== path && dirtyRef.current) {
+          return `${tildePath(current.path, shell.env.HOME)} has unsaved changes; save or close it first`;
+        }
+        setEditing({ path, token: (current?.token ?? 0) + 1 });
+        return null;
+      },
+    };
+    return () => {
+      shell.host = undefined;
+    };
+  }, [shell]);
+
+  const closeEditor = useCallback(() => {
+    dirtyRef.current = false;
+    setEditing(null);
+    terminal.current?.focus();
+  }, []);
+  const onDirtyChange = useCallback((dirty: boolean) => {
+    dirtyRef.current = dirty;
+  }, []);
+  const print = useCallback((kind: "stdout" | "stderr", text: string) => terminal.current?.print(kind, text), []);
+  const displayPath = useCallback((p: string) => tildePath(p, shell.env.HOME), [shell]);
+
   const onFiles = async (files: File[]) => {
     setUploading(true);
     try {
@@ -72,13 +107,25 @@ function Workspace() {
   };
 
   return (
-    <>
+    <div className="workspace">
+      {editing && (
+        <EditorPane
+          key={editing.path}
+          fs={shell.fs}
+          path={editing.path}
+          focusToken={editing.token}
+          displayPath={displayPath}
+          onClose={closeEditor}
+          onDirtyChange={onDirtyChange}
+          print={print}
+        />
+      )}
       <div className="toolbar">
         <UploadButton onFiles={onFiles} disabled={uploading} />
         <SettingsMenu />
       </div>
       <Terminal ref={terminal} shell={shell} banner={BANNER + (disk.notice ?? "")} />
-    </>
+    </div>
   );
 }
 

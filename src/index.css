@@ -263,3 +263,139 @@ body {
 .terminal.loading {
   color: var(--muted);
 }
+
+/* ---- workspace: editor on top (80%), terminal below ------------------- */
+
+.workspace {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace > .terminal {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+
+.editor-pane {
+  flex: 0 0 80%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+}
+
+/* While editing, the terminal no longer sits under the toolbar. */
+.editor-pane ~ .terminal {
+  padding-right: 1.25rem;
+}
+
+.editor-titlebar {
+  flex: 0 0 auto;
+  height: 56px; /* the fixed toolbar (top right) is centred in this bar */
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  /* leave room on the right for the toolbar's two buttons */
+  padding: 0 calc(0.75rem + 2 * 32px + 6px + 12px) 0 1rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.editor-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.editor-dirty {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.editor-prompt,
+.editor-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.editor-notice {
+  color: var(--muted);
+}
+
+.editor-notice.error,
+.editor-status.error {
+  color: var(--error);
+}
+
+.editor-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.editor-titlebar button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.editor-titlebar button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.editor-titlebar button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.editor-titlebar button.danger {
+  color: var(--error);
+}
+
+.editor-titlebar .editor-close {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  padding: 0;
+}
+
+.editor-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.editor-monaco {
+  position: absolute;
+  inset: 0;
+}
+
+.editor-status {
+  position: absolute;
+  inset: 0;
+  padding: 1rem;
+  color: var(--muted);
+  font-family: var(--font-ui);
+}

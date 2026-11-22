@@ -17,16 +17,19 @@ type Entry =
 
 let nextId = 0;
 
+/** Show a path with the home directory as ~, like the prompt does. */
+export function tildePath(path: string, home: string | undefined): string {
+  return home && (path === home || path.startsWith(home + "/")) ? "~" + path.slice(home.length) : path;
+}
+
 function promptFor(shell: Shell): string {
-  const home = shell.env.HOME ?? "";
-  const cwd = shell.cwd;
-  const shown = home && (cwd === home || cwd.startsWith(home + "/")) ? "~" + cwd.slice(home.length) : cwd;
-  return `${shell.env.USER ?? "user"}@onno:${shown}$`;
+  return `${shell.env.USER ?? "user"}@onno:${tildePath(shell.cwd, shell.env.HOME)}$`;
 }
 
 /** Lets the rest of the app (e.g. the upload button) write into the terminal. */
 export interface TerminalHandle {
   print(kind: "stdout" | "stderr", text: string): void;
+  focus(): void;
 }
 
 export function Terminal({ shell, banner, ref }: { shell: Shell; banner?: string; ref?: Ref<TerminalHandle> }) {
@@ -76,9 +79,22 @@ export function Terminal({ shell, banner, ref }: { shell: Shell; banner?: string
     if (el) el.scrollTop = el.scrollHeight;
   }, [entries, busy]);
 
+  // Refocus the prompt when a command finishes, unless focus is in the editor (e.g. `mon`
+  // just opened it).
   useEffect(() => {
-    if (!busy) inputRef.current?.focus();
+    if (!busy && !document.activeElement?.closest(".editor-pane")) inputRef.current?.focus();
   }, [busy]);
+
+  // Stay scrolled to the bottom when the terminal is resized (e.g. the editor opens).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   /** Append output, merging with the previous entry when it's the same stream. */
   const write = useCallback((kind: "stdout" | "stderr", text: string) => {
@@ -92,7 +108,7 @@ export function Terminal({ shell, banner, ref }: { shell: Shell; banner?: string
     });
   }, []);
 
-  useImperativeHandle(ref, () => ({ print: write }), [write]);
+  useImperativeHandle(ref, () => ({ print: write, focus: () => inputRef.current?.focus() }), [write]);
 
   const submit = async (line: string) => {
     setEntries((prev) => [...prev, { id: nextId++, kind: "input", prompt, text: line }]);
