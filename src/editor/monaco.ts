@@ -5,7 +5,7 @@
 import * as monaco from "monaco-editor";
 
 // Monaco runs language services in web workers. They're bundled separately and served
-// from /monaco/ (see workers.ts and src/index.ts).
+// from /monaco/ (see src/workers.ts and src/index.ts).
 const WORKER_FOR_LABEL: Record<string, string> = {
   json: "json.worker.js",
   css: "css.worker.js",

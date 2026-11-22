@@ -40,8 +40,8 @@ describe("command completion", () => {
   });
 
   test("ambiguous: common prefix, then candidates", () => {
-    expect(tab("m").line).toBe("m"); // man, mkdir, mkthing, mon, motd share only "m"
-    expect(tab("m").candidates).toEqual(["man", "mkdir", "mkthing", "mon", "motd"]);
+    expect(tab("m").line).toBe("m"); // man, mkdir, mkthing, mon, motd, mv share only "m"
+    expect(tab("m").candidates).toEqual(["man", "mkdir", "mkthing", "mon", "motd", "mv"]);
     expect(tab("mk").candidates).toEqual(["mkdir", "mkthing"]);
   });
 

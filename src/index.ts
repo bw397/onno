@@ -1,24 +1,50 @@
 import { serve } from "bun";
-import { buildMonacoWorkers } from "./editor/workers";
+import { watch } from "node:fs";
 import index from "./index.html";
+import { buildWorker, buildWorkers, WORKER_PATHS, type WorkerPath } from "./workers";
 
-// Monaco's web workers are bundled separately (Bun's bundler can't follow them) and
-// served from memory. Takes ~0.4 s at startup.
-const monacoWorkers = await buildMonacoWorkers(true);
+const development = process.env.NODE_ENV !== "production";
+
+// Web Workers (Monaco's language services, the AssemblyScript compiler) are bundled
+// separately, since Bun's bundler can't follow them, and served from memory. ~1 s at startup.
+const workers = await buildWorkers(true);
+
+// `bun --hot` only reloads modules the server imports, and worker sources are built from
+// a path rather than imported, so it would keep serving stale workers. In development,
+// watch src/ and rebuild a worker on its next request after anything changes.
+const stale = new Set<WorkerPath>();
+if (development) {
+  watch(import.meta.dir, { recursive: true }, () => WORKER_PATHS.forEach((p) => stale.add(p)));
+}
+
+async function workerSource(path: WorkerPath): Promise<string> {
+  if (stale.delete(path)) workers.set(path, await buildWorker(path, true));
+  return workers.get(path)!;
+}
+
+const workerRoutes = Object.fromEntries(
+  WORKER_PATHS.map((path) => [
+    `/${path}`,
+    async () =>
+      new Response(await workerSource(path), {
+        headers: {
+          "content-type": "text/javascript; charset=utf-8",
+          // Always revalidate, so a rebuilt worker is picked up on the next load.
+          "cache-control": "no-cache",
+        },
+      }),
+  ]),
+);
 
 const server = serve({
   routes: {
-    "/monaco/:file": (req) => {
-      const js = monacoWorkers.get(req.params.file as never);
-      if (!js) return new Response("Not found", { status: 404 });
-      return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8" } });
-    },
+    ...workerRoutes,
 
     // The app is entirely client-side; serve index.html for every other route.
     "/*": index,
   },
 
-  development: process.env.NODE_ENV !== "production" && {
+  development: development && {
     // Enable browser hot reloading in development
     hmr: true,
 

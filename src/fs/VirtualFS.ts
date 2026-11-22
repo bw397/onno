@@ -196,6 +196,40 @@ export class VirtualFS {
     this.set(p, null);
   }
 
+  /** Set an existing file's or directory's modification time to now. */
+  touch(path: string): void {
+    const p = normalize(path);
+    const node = this.nodes.get(p);
+    if (!node) throw new FsError("ENOENT", p);
+    this.set(p, { ...node, mtime: Date.now() });
+  }
+
+  /**
+   * Move a file or directory (with everything under it) to `to`, like rename(2):
+   * an existing file at `to` is replaced; an existing directory only if both are
+   * directories and it's empty. Timestamps are kept.
+   */
+  rename(from: string, to: string): void {
+    const f = normalize(from);
+    const t = normalize(to);
+    if (f === "/") throw new FsError("EINVAL", f);
+    const node = this.nodes.get(f);
+    if (!node) throw new FsError("ENOENT", f);
+    if (f === t) return;
+    if (t.startsWith(f + "/")) throw new FsError("EINVAL", t); // into itself
+    this.requireParentDir(t);
+    const existing = this.nodes.get(t);
+    if (existing) {
+      if (node.type === "dir" && existing.type !== "dir") throw new FsError("ENOTDIR", t);
+      if (node.type !== "dir" && existing.type === "dir") throw new FsError("EISDIR", t);
+      if (existing.type === "dir" && this.readdir(t).length) throw new FsError("ENOTEMPTY", t);
+    }
+    const moving = [f, ...[...this.nodes.keys()].filter((k) => k.startsWith(f + "/"))];
+    const entries = moving.map((k) => [k, this.nodes.get(k)!] as const);
+    for (const [k] of entries) this.set(k, null);
+    for (const [k, n] of entries) this.set(t + k.slice(f.length), n);
+  }
+
   // ---- persistence -------------------------------------------------------
 
   get hasPendingChanges(): boolean {

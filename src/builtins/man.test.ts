@@ -1,7 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { MemoryBackend, VirtualFS } from "../fs";
 import { parse, Shell } from "../shell";
 import { builtins, createBuiltinRegistry } from ".";
+import { runAscInProcess } from "../asc/inprocess";
+import { setAscRunner } from "./asc";
+
+// Compile for real, so asc's examples are checked like the others.
+beforeAll(() => setAscRunner(runAscInProcess));
+afterAll(() => setAscRunner());
 
 /** A shell on the default seeded disk, plus a few files the examples mention. */
 async function freshShell() {
@@ -46,16 +52,28 @@ describe("builtin documentation", () => {
   test.each(examples)("%s example parses and uses real commands: %s", async (_, command) => {
     const shell = await freshShell();
     for (const name of commandNames(command)) {
+      // A path (./prog.wasm) may be a file an earlier example creates; the in-order run
+      // below checks those. Command names must exist already.
+      if (name.includes("/")) continue;
       expect(shell.resolveCommand(name).kind).not.toBe("error");
     }
   });
 
-  // curl examples need the network; everything else runs against the seeded disk.
-  test.each(examples.filter(([name]) => name !== "curl"))("%s example runs cleanly: %s", async (_, command) => {
-    const r = await run(command);
-    expect(r.stderr).not.toMatch(/invalid option|unrecognized|unknown predicate|missing argument|usage:|parse error/);
-    expect(r.status).not.toBe(2);
-  });
+  // Each builtin's examples run in order in one shell, so later ones may build on earlier
+  // ones (like reading a man page). curl's need the network; the rest use the seeded disk.
+  test.each(builtins.filter((b) => b.name !== "curl").map((b) => [b.name, b] as const))(
+    "%s examples run cleanly, in order",
+    async (_, b) => {
+      const shell = await freshShell();
+      for (const { command } of b.examples ?? []) {
+        const r = await run(command, shell);
+        expect({ command, stderr: r.stderr }).not.toMatchObject({
+          stderr: expect.stringMatching(/invalid option|unrecognized|unknown predicate|missing argument|usage:|parse error|not found/),
+        });
+        expect({ command, status: r.status }).not.toEqual({ command, status: 2 });
+      }
+    },
+  );
 });
 
 describe("man", () => {
@@ -66,7 +84,7 @@ describe("man", () => {
       expect(stdout).toMatch(new RegExp(`^${s}$`, "m"));
     }
     expect(stdout).toContain("       ls - list directory contents\n");
-    expect(stdout).toContain("       ls [-a] [-l] [PATH]...\n");
+    expect(stdout).toContain("       ls [-a] [-l] [-h] [PATH]...\n");
     expect(stdout).toContain("       -a   include names starting with");
     expect(stdout).toContain("       $ ls -la /\n           Long listing");
     expect(stdout).toContain("src/builtins/ls.ts");
@@ -115,9 +133,11 @@ describe("man", () => {
   test("-k searches names and summaries, including scripts", async () => {
     expect((await run("man -k director")).stdout).toBe(
       "cd    - change the working directory\n" +
+        "cp    - copy files and directories\n" +
         "find  - search for files in a directory hierarchy\n" +
         "ls    - list directory contents\n" +
         "mkdir - make directories\n" +
+        "mv    - move or rename files and directories\n" +
         "pwd   - print the current working directory\n" +
         "rm    - remove files or directories\n",
     );

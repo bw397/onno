@@ -28,6 +28,14 @@ bun run build    # production bundle into dist/
 - `src/editor/`: the `mon` editor. `EditorPane.tsx` is the UI, `monaco.ts` is the
   lazily imported Monaco setup, and `workers.ts` bundles Monaco's web workers
   (server-side).
+- `src/asc/`: the AssemblyScript compiler bridge. `compile.ts` is the core (argv
+  passed to `asc.main()` unchanged, file access redirected), `worker.ts`/`client.ts`/
+  `protocol.ts` run it in a Web Worker, and `inprocess.ts` runs it on the current
+  thread (tests only).
+- `src/wasm/`: the `wasm` runner. `inspect.ts` parses signatures from the binary and
+  can defer a start function, `imports.ts` holds the AssemblyScript host functions,
+  `run.ts` is the thread-agnostic core, and `worker.ts`/`client.ts` run it in a worker.
+- `src/workers.ts` (server-side): bundles every Web Worker (Monaco's, asc's, wasm's).
 - `src/preview/`: the `preview` viewer (`PreviewPane.tsx`) and `viewable.ts` (file
   type detection from magic bytes, then extension).
 - `src/pane/Pane.tsx`: the shared top-pane frame (title bar + close) used by both.
@@ -51,9 +59,10 @@ bun run build    # production bundle into dist/
    `index.ts`.
 2. Fill in `summary` (lower case, no period), `usage` (a synopsis line, then option
    lines), `description` and at least two `examples`. **These are the man page.**
-   `man.test.ts` fails if any is missing. It also *runs every example* against the
-   default seeded disk, so examples must parse, use real commands, and not hit usage
-   errors. Examples that need the network belong to `curl`, which is excluded.
+   `man.test.ts` fails if any is missing. It also *runs every example*, in order, in
+   one shell on the default seeded disk: later examples may build on earlier ones, and
+   none may hit usage errors or "not found". Examples that need the network belong to
+   `curl`, which is excluded.
 3. Parse options with `parseOptions` from `options.ts`; throw/catch `OptionError` for
    usage errors. (`flags.ts` is an older boolean-only helper still used by
    ls/mkdir/rm.)
@@ -89,8 +98,8 @@ bun run build    # production bundle into dist/
   (`ENOSPC` for quota, `EIO` otherwise), so memory always matches storage.
 - A builtin that wants to handle a save failure itself flushes explicitly (`curl -o`
   does, to exit 23); otherwise the shell reports it after the command.
-- Mutating methods validate everything before changing anything, so a throwing call
-  queues nothing. Keep new ones that way, and route all changes through `set()`.
+- Mutating methods (`writeFile`, `mkdir`, `remove`, `rename`, `touch`) validate
+  everything before changing anything, so a throwing call queues nothing. Keep new ones that way, and route all changes through `set()`.
 - File content is `string | Uint8Array` (`FileContent`). Valid UTF-8 stays a string
   (`fromBytes()`). `readFile()` is the text view (binary is decoded lossily);
   `readBytes()`/`isBinary()` exist for byte-exact work. `FileNode.size` is bytes; use
@@ -116,6 +125,11 @@ bun run build    # production bundle into dist/
   Hand-written expected output has been wrong here several times.
 
 ## Checking in a real browser
+
+**A dev server may already be running on port 3000** (the user's `bun dev`). Don't
+stop it. Run your own on another port (`PORT=3456 bun src/index.ts`; Bun's `serve()`
+honours `PORT`), and stop it by PID (`lsof -t -i :3456`). Never `pkill -f` with a
+pattern that appears in your own command line: it kills your shell.
 
 There's no Playwright package, but its browsers are cached at
 `~/.cache/ms-playwright/` (`chromium_headless_shell-*`). Launch
@@ -156,6 +170,53 @@ HTML first. Put such scripts in the session scratchpad, not the repo.
   Firefox (pdf.js). In flex/grid layouts, use flex for media so `max-height: 100%`
   resolves; in a grid cell it doesn't.
 
+## AssemblyScript (`asc`)
+
+- `asc` passes `ctx.args` straight to `asc.main()`, as `bin/asc.js` does, with exit
+  status 1 on error. Don't parse or reinterpret the options; the compiler owns them
+  (including `--help`, `--config`, `--target`).
+- The compiler runs in a module Web Worker (`/asc/asc.worker.js`, ~21 MB). Its file
+  callbacks are async: the worker sends disk requests to the main thread
+  (`client.ts`), which answers from the VirtualFS. Ctrl+C terminates the worker; the
+  next run starts a new one.
+- **Worker gotcha:** `assemblyscript/asc` uses top-level await. A worker that imports it
+  statically doesn't set `onmessage` until it has loaded, and messages posted
+  meanwhile are silently dropped. Set the handler first and `await import(...)` inside
+  it (see `worker.ts`). The worker then posts `{ type: "ready" }`, and `client.ts` only
+  sends work after that. A worker that isn't ready within 20 s is reported as an
+  error, never waited on forever.
+- **Stale workers in dev:** `bun --hot` only reloads modules the server imports, and
+  worker sources are built from a path, so they used to stay stale until a restart
+  (that's what made `asc` hang). `src/index.ts` now watches `src/` in development and
+  rebuilds a worker on its next request after any change, served with
+  `Cache-Control: no-cache`. If a worker misbehaves, compare what the server serves
+  with a fresh `buildWorker()` before debugging the code.
+- **Bundle gotcha:** no `import("assemblyscript/asc")` may be reachable from app code,
+  or Bun bundles the compiler into the app (and fails on its Node built-ins). The
+  builtin gets its runner from `setAscRunner()` (default: the worker client); tests
+  call `setAscRunner(runAscInProcess)` from `asc/inprocess.ts`.
+- asc imports Node built-ins (`fs`, `module`, ...) behind a "running in Node?" check.
+  `Bun.build` for the browser rejects them, so `src/workers.ts` marks them `external`.
+- Binary on stdout (`-o` with no file name) is refused with a message, because shell
+  output is text.
+
+## Running WebAssembly (`wasm`)
+
+- `run.ts` works on any thread. The builtin uses a fresh worker per run in the browser
+  (`/wasm/run.worker.js`; Ctrl+C terminates it) and calls `runWasm` in-process
+  elsewhere (tests). It has no heavy dependencies, so no runner injection is needed.
+- The shell runs a file that starts with `\0asm` through the `wasm` builtin
+  (`Shell.isWasmFile`), so `./x.wasm FUNC ARGS` and `.wasm` files on `$PATH` work.
+- **Start functions:** AssemblyScript top-level code is the module's start function,
+  which runs inside `WebAssembly.instantiate()`, before the instance's memory is
+  available, so `console.log` couldn't read its string. `deferStart()` rewrites the
+  binary (drops the start section, exports the function as `__onno_start`), and the
+  runner calls it after instantiation. Keep that export hidden from listings.
+- AssemblyScript strings: the pointer is to UTF-16LE data, and the byte length is the
+  u32 just before it.
+- Argument types come from `inspectWasm()` (the JS API doesn't expose them). Options
+  are only recognised before FILE, so `-5` after it is an argument.
+
 ## Monaco editor (`mon`)
 
 - `mon` validates the file and calls `shell.host.openEditor(path)`, then returns at
@@ -165,11 +226,11 @@ HTML first. Put such scripts in the session scratchpad, not the repo.
 - Monaco is imported dynamically (`await import("./monaco")`) so it stays out of the
   initial bundle; `bun run build` uses `--splitting` for that.
 - **Workers:** Bun's bundler leaves `new Worker(new URL("…", import.meta.url))` as a
-  `file://` URL, which the browser refuses. So `src/editor/workers.ts` bundles each
-  worker with `Bun.build`. `src/index.ts` serves them from memory at
-  `/monaco/<name>.worker.js`, and `scripts/build-workers.ts` writes them to
-  `dist/monaco/`. Import worker paths through the package's `exports` map
-  (`monaco-editor/language/json/json.worker`), not `esm/vs/…`.
+  `file://` URL, which the browser refuses. So `src/workers.ts` bundles each worker
+  with `Bun.build`, keyed by URL path. `src/index.ts` serves them from memory, and
+  `scripts/build-workers.ts` writes them into `dist/`. Load them with
+  `new URL("monaco/…", document.baseURI)`. Import worker paths through the package's
+  `exports` map (`monaco-editor/language/json/json.worker`), not `esm/vs/…`.
 - The browser's confirm dialogs aren't used: confirmations (unsaved changes, file
   changed on disk) live in the editor's title bar. `beforeunload` warns about unsaved
   edits.

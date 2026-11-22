@@ -99,5 +99,10 @@ describe("df", () => {
     expect(human(1536)).toBe("1.5K");
     expect(human(10 * 1024 + 1)).toBe("11K");
     expect(human(5 * 1024 ** 3)).toBe("5.0G");
+    // Boundaries, checked against GNU ls -lh: the format follows the rounded-up value.
+    expect(human(10239)).toBe("10K"); // 9.999K rounds up to 10K, not 10.0K
+    expect(human(1048575)).toBe("1.0M"); // 1023.999K rounds up into the next unit
+    expect(human(1048577)).toBe("1.1M");
+    expect(human(1099511627775)).toBe("1.0T");
   });
 });

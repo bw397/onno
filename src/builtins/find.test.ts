@@ -120,9 +120,12 @@ describe("find: tests", () => {
   test("-mtime / -mmin / -newer", async () => {
     expect(await lines("find . -mmin -5 -name README.md")).toEqual(["./README.md"]);
     expect(await lines("find . -mtime +1")).toEqual([]);
+    // Write the reference after a pause, so no seed file can share its millisecond.
+    await Bun.sleep(5);
+    fs.writeFile("/home/user/proj/ref.txt", "ref");
     await Bun.sleep(5);
     fs.writeFile("/home/user/proj/fresh.txt", "new");
-    expect(await lines("find . -newer README.md -type f")).toEqual(["./fresh.txt"]);
+    expect(await lines("find . -newer ref.txt -type f")).toEqual(["./fresh.txt"]);
   });
 });
 

@@ -175,10 +175,26 @@ export class Shell {
       return target.status;
     }
 
-    if (target.kind === "file") return this.runScript(target.path, name, args, io);
+    if (target.kind === "file") {
+      // A WebAssembly module is run by the `wasm` builtin (if installed), like a binary.
+      const runner = this.builtins.get("wasm");
+      if (runner && this.isWasmFile(target.path)) return this.runBuiltin(runner, "wasm", [target.path, ...args], stdin, io);
+      return this.runScript(target.path, name, args, io);
+    }
 
+    return this.runBuiltin(target.builtin, name, args, stdin, io);
+  }
+
+  private isWasmFile(path: string): boolean {
+    const node = this.fs.stat(path);
+    if (node?.type !== "file" || typeof node.content === "string") return false;
+    const b = node.content;
+    return b[0] === 0x00 && b[1] === 0x61 && b[2] === 0x73 && b[3] === 0x6d; // "\0asm"
+  }
+
+  private async runBuiltin(builtin: Builtin, name: string, args: string[], stdin: string, io: IO): Promise<ExitStatus> {
     try {
-      return await target.builtin.run({
+      return await builtin.run({
         name,
         args,
         stdin,

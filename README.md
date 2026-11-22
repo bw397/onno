@@ -15,13 +15,15 @@ bun check      # typecheck
 | Path            | What                                                                 |
 | --------------- | -------------------------------------------------------------------- |
 | `src/shell/`    | Lexer, parser (AST), and `Shell` executor                            |
-| `src/builtins/` | One file per builtin (`cat`, `cd`, `curl`, `df`, `echo`, `find`, `grep`, `ls`, `man`, `mkdir`, `mon`, `preview`, `pwd`, `rm`) + registry in `index.ts`   |
+| `src/builtins/` | One file per builtin (`asc`, `cat`, `cd`, `cp`, `curl`, `df`, `echo`, `find`, `grep`, `head`, `ls`, `man`, `mkdir`, `mon`, `mv`, `preview`, `pwd`, `rm`, `tail`, `touch`, `wasm`, `wc`) + registry in `index.ts`   |
 | `src/fs/`       | `VirtualFS` (in memory, saved to IndexedDB), backends, path helpers, seed |
 | `src/settings/` | Settings context (theme, font size; persisted) + top-right menu      |
 | `src/terminal/` | Terminal UI component                                                |
 | `src/editor/`   | Monaco editor pane for `mon`, Monaco setup, worker bundling           |
 | `src/preview/`  | `preview` viewer pane and file-type detection                         |
 | `src/pane/`     | Shared top-pane frame (title bar + close) used by `mon` and `preview` |
+| `src/asc/`      | AssemblyScript compiler bridge: runs `asc` in a Web Worker on the disk |
+| `src/wasm/`     | WebAssembly runner for `wasm`: signatures, AssemblyScript host imports |
 | `src/upload/`   | Upload button (top right) + logic to copy local files onto the disk  |
 
 ## Shell syntax
@@ -113,8 +115,10 @@ file that changed on disk since it was opened asks whether to overwrite or reloa
 
 Monaco (~4 MB) is loaded only the first time `mon` runs. Its web workers (language
 services) are bundled separately, because Bun's bundler doesn't follow
-`new Worker(new URL(...))`: the server builds them at startup (~0.4 s) and serves them
-at `/monaco/*.worker.js`, and `bun run build` writes them to `dist/monaco/`. Monaco's
+`new Worker(new URL(...))`: `src/workers.ts` builds every worker (Monaco's and the
+AssemblyScript compiler's); the server builds them at startup (~1 s) and serves them
+at `/monaco/*.worker.js` and `/asc/asc.worker.js`, and `bun run build` writes them to
+`dist/`. Monaco's
 CSS (~190 KB) ends up in the main stylesheet.
 
 ## preview
@@ -126,3 +130,34 @@ the file's contents, so misnamed uploads still work. SVGs are shown as images, s
 scripts inside them don't run. PDFs use the browser's built-in viewer; browsers without
 one get a message pointing to Download. Only one pane is open at a time, and an
 editor with unsaved changes has to be saved or closed first.
+
+## asc (AssemblyScript)
+
+`asc` is the real AssemblyScript compiler (the `assemblyscript` package). Arguments
+go to its `main()` unchanged, exactly as the `asc` executable passes them, so every
+option, `asconfig.json` (`--config`, `--target`) and output file works as documented
+(`asc --help`). Files are read from and written to the disk relative to the current
+directory; `.wasm` output is stored as binary.
+
+The compiler (~21 MB with Binaryen) runs in a Web Worker, loaded the first time `asc`
+runs (~0.5 s), so the page stays responsive; Ctrl+C stops a compile. Binary output to
+stdout (`-o` with no file name) is refused, since pipes and the terminal carry text.
+
+## wasm (running WebAssembly)
+
+`wasm FILE [FUNCTION [ARG...]]` instantiates a module and calls an exported function,
+printing its result; arguments are converted to the parameter types (`i32`, `i64`,
+`f32`, `f64`), read from the binary. With no FUNCTION it runs the module's top-level
+code and then `_start` or `main` (an integer result is the exit status); `wasm -l FILE`
+lists exports with signatures. `.wasm` files can be run directly (`./add.wasm add 1 2`,
+or from `$PATH`).
+
+Modules from `asc` get their host functions: `console.log`/`error`/..., `trace`, and
+`abort` (failed assertions report their message and source position). Other imports
+are listed as missing. Each run gets its own Web Worker, so an endless loop can't
+freeze the page; Ctrl+C stops it.
+
+```sh
+echo 'export function add(a: i32, b: i32): i32 { return a + b; }' > add.ts
+asc add.ts -o add.wasm && wasm add.wasm add 2 40     # 42
+```

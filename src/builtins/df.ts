@@ -1,5 +1,8 @@
 import type { Builtin } from "../shell";
 import { OptionError, parseOptions, type OptionSpec } from "./options";
+import { human } from "./units";
+
+export { human };
 
 const USAGE = `usage: df [-h] [-k] [-v] [FILE]...
   -h   human-readable sizes (K, M, G)
@@ -11,20 +14,6 @@ const SPECS: OptionSpec[] = [
   { key: "kilo", short: "k" },
   { key: "verbose", short: "v", long: "verbose" },
 ];
-
-/** GNU df -h style: powers of 1024, one decimal below 10, rounded up. */
-export function human(n: number): string {
-  const units = ["", "K", "M", "G", "T", "P"];
-  let value = n;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit++;
-  }
-  if (unit === 0) return String(n);
-  const rounded = value < 10 ? Math.ceil(value * 10) / 10 : Math.ceil(value);
-  return (value < 10 ? rounded.toFixed(1) : String(rounded)) + units[unit];
-}
 
 const blocks = (n: number) => String(Math.ceil(n / 1024));
 

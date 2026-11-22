@@ -156,6 +156,18 @@ describe("builtins", () => {
     expect(lines[0]).toMatch(/^-  6  \w{3} [ \d]\d \d\d:\d\d  a\.txt$/);
   });
 
+  test("ls -lh shows human-readable sizes", async () => {
+    fs.writeFile("/home/user/big.bin", new Uint8Array(1536));
+    fs.writeFile("/home/user/huge.bin", new Uint8Array(3 * 1024 * 1024 + 1));
+    const sizes = (await run("ls -lh")).stdout
+      .trimEnd()
+      .split("\n")
+      .map((l) => l.split(/\s+/).slice(1, 2)[0] + " " + l.split(/\s+/).at(-1));
+    expect(sizes).toEqual(["6 a.txt", "5 b.txt", "1.5K big.bin", "3.1M huge.bin"]);
+    expect((await run("ls -hl big.bin")).stdout).toMatch(/^-  1\.5K  /);
+    expect((await run("ls -h")).stdout).toBe("a.txt  b.txt  big.bin  huge.bin\n"); // -h alone changes nothing
+  });
+
   test("ls errors", async () => {
     const r = await run("ls nope");
     expect(r.status).toBe(2);
