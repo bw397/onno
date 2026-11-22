@@ -1,0 +1,261 @@
+:root {
+  --font-size: 14px;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* dark (default) */
+  --bg: #101216;
+  --fg: #d6d9df;
+  --muted: #7d838f;
+  --prompt: #8fcf6b;
+  --error: #f2777a;
+  --accent: #7aa2f7;
+  --panel: #191c22;
+  --border: #2b303a;
+  --hover: #242831;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #fbfbfa;
+  --fg: #1f2328;
+  --muted: #6e7781;
+  --prompt: #1a7f37;
+  --error: #cf222e;
+  --accent: #0969da;
+  --panel: #ffffff;
+  --border: #d5d9de;
+  --hover: #f0f2f4;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/* ---- terminal ---------------------------------------------------------- */
+
+.terminal {
+  height: 100%;
+  overflow-y: auto;
+  padding: 1rem 1.25rem;
+  padding-right: 6.5rem; /* keep clear of the toolbar */
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  line-height: 1.45;
+  cursor: text;
+}
+
+.line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.input-line {
+  display: flex;
+  gap: 1ch;
+}
+
+.prompt {
+  color: var(--prompt);
+  flex-shrink: 0;
+}
+
+.output {
+  margin: 0;
+  font: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.output.stderr {
+  color: var(--error);
+}
+
+.term-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  caret-color: var(--fg);
+}
+
+/* ---- settings ---------------------------------------------------------- */
+
+/* ---- toolbar (top right) ---------------------------------------------- */
+
+.toolbar {
+  position: fixed;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 10;
+  display: flex;
+  gap: 6px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.icon-button:hover:not(:disabled),
+.icon-button[aria-expanded="true"] {
+  color: var(--fg);
+  background: var(--hover);
+}
+
+.icon-button:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.settings {
+  position: relative;
+}
+
+.settings-panel button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.settings-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 260px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+  display: grid;
+  /* Cap the column at the panel width; an `auto` column grows to fit content, and
+     Firefox's range input is wide enough to push it past the right border. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.settings-row {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.segmented button {
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+}
+
+.segmented button + button {
+  border-left: 1px solid var(--border);
+}
+
+.segmented button:hover {
+  background: var(--hover);
+}
+
+.segmented button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.font-size-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.font-size-control button {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  line-height: 1;
+}
+
+.font-size-control button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.font-size-control button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.font-size-control input[type="range"] {
+  /* width: 0 + flex: 1 fills the leftover space; Firefox otherwise keeps the
+     slider at its intrinsic width and pushes the label past the border. */
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.font-size-value {
+  width: 3.2em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-footer {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted) !important;
+}
+
+.link-button:hover {
+  color: var(--fg) !important;
+  text-decoration: underline;
+}
