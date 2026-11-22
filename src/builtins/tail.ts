@@ -18,7 +18,7 @@ export const tail: Builtin = {
     { command: "tail -n +3 welcome.txt", description: "Everything from line 3 on." },
     { command: "man grep | tail -3", description: "The last three lines of a command's output." },
   ],
-  run(ctx) {
+  async run(ctx) {
     let opts;
     try {
       opts = parseCount(ctx.args, "tail");
@@ -27,7 +27,7 @@ export const tail: Builtin = {
       ctx.stderr(`tail: ${err.message}\nusage: ${tail.usage}\n`);
       return 2;
     }
-    const { inputs, failed } = readInputs(ctx, "tail", opts.operands);
+    const { inputs, failed } = await readInputs(ctx, "tail", opts.operands);
     const showHeaders = opts.headers ?? opts.operands.length > 1;
     // +N counts from the start (1-based); otherwise from the end.
     const from = (length: number) => (opts.sign === "+" ? Math.max(0, opts.count - 1) : Math.max(0, length - opts.count));

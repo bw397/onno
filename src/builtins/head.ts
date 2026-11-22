@@ -41,7 +41,7 @@ export const head: Builtin = {
     { command: "head -1 welcome.txt /etc/motd", description: "The first line of each file, with headers." },
     { command: "man ls | head", description: "The first ten lines of a command's output." },
   ],
-  run(ctx) {
+  async run(ctx) {
     let opts;
     try {
       opts = parseCount(ctx.args, "head");
@@ -50,7 +50,7 @@ export const head: Builtin = {
       ctx.stderr(`head: ${err.message}\nusage: ${head.usage}\n`);
       return 2;
     }
-    const { inputs, failed } = readInputs(ctx, "head", opts.operands);
+    const { inputs, failed } = await readInputs(ctx, "head", opts.operands);
     const showHeaders = opts.headers ?? opts.operands.length > 1;
     inputs.forEach((input, i) => {
       if (showHeaders) ctx.stdout(`${i ? "\n" : ""}==> ${input.name ?? "standard input"} <==\n`);

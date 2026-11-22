@@ -50,6 +50,24 @@ export function Terminal({ shell, banner, ref }: { shell: Shell; banner?: string
 
   /** Aborts the running command; set while busy. */
   const abortRef = useRef<AbortController | null>(null);
+  /** True while the running command waits for a line of input (e.g. `cat > file`). */
+  const [reading, setReading] = useState(false);
+  /** Delivers the next typed line (or null at end of input) to the waiting command. */
+  const deliverRef = useRef<((line: string | null) => void) | null>(null);
+
+  /** The terminal as standard input: the shell calls this when a command reads stdin. */
+  const readLine = useCallback(
+    () =>
+      new Promise<string | null>((resolve) => {
+        deliverRef.current = (line) => {
+          deliverRef.current = null;
+          setReading(false);
+          resolve(line);
+        };
+        setReading(true);
+      }),
+    [],
+  );
 
   // The input is disabled while a command runs, so listen for Ctrl+C on the window.
   useEffect(() => {
@@ -60,6 +78,7 @@ export function Terminal({ shell, banner, ref }: { shell: Shell; banner?: string
       if (abortRef.current && !abortRef.current.signal.aborted) {
         abortRef.current.abort();
         write("stdout", "^C\n");
+        deliverRef.current?.(null); // unblock a command waiting for input
       }
     };
     window.addEventListener("keydown", onKey);
@@ -77,13 +96,18 @@ export function Terminal({ shell, banner, ref }: { shell: Shell; banner?: string
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [entries, busy]);
+  }, [entries, busy, reading]);
 
   // Refocus the prompt when a command finishes, unless focus is in the top pane (e.g. `mon`
   // just opened the editor).
   useEffect(() => {
     if (!busy && !document.activeElement?.closest(".pane")) inputRef.current?.focus();
   }, [busy]);
+
+  // A command wants input: focus the input line.
+  useEffect(() => {
+    if (reading) inputRef.current?.focus();
+  }, [reading]);
 
   // Stay scrolled to the bottom when the terminal is resized (e.g. the editor opens).
   useEffect(() => {
@@ -127,10 +151,12 @@ export function Terminal({ shell, banner, ref }: { shell: Shell; banner?: string
         stdout: (s) => write("stdout", s),
         stderr: (s) => write("stderr", s),
         signal: controller.signal,
+        readLine,
       });
     } catch (err) {
       write("stderr", `onno: internal error: ${err instanceof Error ? err.message : String(err)}\n`);
     } finally {
+      deliverRef.current?.(null); // nothing should still be waiting, but never leave it hanging
       abortRef.current = null;
       setPrompt(promptFor(shell));
       setBusy(false);
@@ -156,7 +182,32 @@ export function Terminal({ shell, banner, ref }: { shell: Shell; banner?: string
     }
   };
 
+  /** Keys while a running command waits for input: lines go to the command, not the shell. */
+  const onInputKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    const deliver = deliverRef.current;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      write("stdout", input + "\n"); // echo, as a terminal does
+      setInput("");
+      deliver?.(input + "\n");
+    } else if (e.ctrlKey && !e.altKey && !e.metaKey && e.key === "d") {
+      e.preventDefault(); // also stops the browser's bookmark shortcut
+      if (input === "") {
+        deliver?.(null); // end of input
+      } else {
+        // Mid-line, Ctrl+D sends what's typed so far without a newline.
+        write("stdout", input);
+        setInput("");
+        deliver?.(input);
+      }
+    } else if (e.key === "Tab") {
+      e.preventDefault(); // no completion for program input; keep focus here
+    }
+    // Ctrl+C reaches the window listener, which interrupts the command.
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (reading) return onInputKeyDown(e);
     if (e.key === "Tab") {
       if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
       e.preventDefault(); // keep focus in the terminal
@@ -206,7 +257,7 @@ export function Terminal({ shell, banner, ref }: { shell: Shell; banner?: string
   };
 
   return (
-    <div className="terminal" ref={scrollRef} onClick={onClick}>
+    <div className="terminal" ref={scrollRef} onClick={onClick} data-busy={busy || undefined}>
       {entries.map((e) =>
         e.kind === "input" ? (
           <div key={e.id} className="line">
@@ -218,20 +269,22 @@ export function Terminal({ shell, banner, ref }: { shell: Shell; banner?: string
           </pre>
         ),
       )}
-      <div className="line input-line" hidden={busy}>
-        <span className="prompt">{prompt}</span>
+      {/* While a command runs the line is hidden, unless the command is waiting for
+          input: then it's shown without a prompt, and what's typed goes to the command. */}
+      <div className="line input-line" hidden={busy && !reading}>
+        {!busy && <span className="prompt">{prompt}</span>}
         <input
           ref={inputRef}
           className="term-input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
-          disabled={busy}
+          disabled={busy && !reading}
           spellCheck={false}
           autoCapitalize="off"
           autoComplete="off"
           autoCorrect="off"
-          aria-label="Command input"
+          aria-label={reading ? "Input for the running command" : "Command input"}
         />
       </div>
     </div>

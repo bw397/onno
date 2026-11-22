@@ -1,7 +1,7 @@
 import { FsError, path, type VirtualFS } from "../fs";
 import { ParseError } from "./lexer";
 import { parse } from "./parser";
-import type { AndOrList, Builtin, ExitStatus, IO, Pipeline, ShellHost, SimpleCommand, Word } from "./types";
+import type { AndOrList, Builtin, ExitStatus, IO, Pipeline, ShellHost, SimpleCommand, StdinSource, Word } from "./types";
 
 const MAX_SCRIPT_DEPTH = 32;
 /** Exit status for a command interrupted by Ctrl+C (128 + SIGINT). */
@@ -11,6 +11,44 @@ export interface ShellOptions {
   cwd?: string;
   env?: Record<string, string>;
   host?: ShellHost;
+}
+
+/** A pipe or file as standard input: its text, read once (later reads see end of input). */
+export function textSource(text: string): StdinSource {
+  let done = false;
+  return {
+    isTerminal: false,
+    async read() {
+      if (done || text === "") return null;
+      done = true;
+      return text;
+    },
+  };
+}
+
+/** The terminal as standard input: each read waits for the next line the user types. */
+function terminalSource(readLine: () => Promise<string | null>): StdinSource {
+  return { isTerminal: true, read: readLine };
+}
+
+/** The stdin methods a builtin gets, over a source. */
+function stdinApi(src: StdinSource) {
+  async function* stdinChunks() {
+    for (;;) {
+      const chunk = await src.read();
+      if (chunk === null) return;
+      yield chunk;
+    }
+  }
+  return {
+    stdinChunks,
+    async readStdin() {
+      let all = "";
+      for await (const chunk of stdinChunks()) all += chunk;
+      return all;
+    },
+    stdinIsTerminal: src.isTerminal,
+  };
 }
 
 type Resolution =
@@ -61,8 +99,15 @@ export class Shell {
     return path.resolve(this._cwd, p);
   }
 
-  /** Parse and run a line (or a whole script). Returns the final exit status. */
-  async run(source: string, io: IO): Promise<ExitStatus> {
+  /**
+   * Parse and run a line (or a whole script). Returns the final exit status. Commands
+   * read standard input from the terminal (io.readLine) if there is one.
+   */
+  run(source: string, io: IO): Promise<ExitStatus> {
+    return this.exec(source, io, io.readLine ? terminalSource(io.readLine) : textSource(""));
+  }
+
+  private async exec(source: string, io: IO, stdin: StdinSource): Promise<ExitStatus> {
     let script;
     try {
       script = parse(source);
@@ -73,25 +118,28 @@ export class Shell {
     }
     for (const list of script) {
       if (io.signal?.aborted) return (this.lastStatus = INTERRUPTED);
-      await this.runAndOr(list, io);
+      await this.runAndOr(list, io, stdin);
     }
     return this.lastStatus;
   }
 
-  private async runAndOr(list: AndOrList, io: IO): Promise<void> {
-    this.lastStatus = await this.runPipeline(list.first, io);
+  private async runAndOr(list: AndOrList, io: IO, stdin: StdinSource): Promise<void> {
+    this.lastStatus = await this.runPipeline(list.first, io, stdin);
     for (const { op, pipeline } of list.rest) {
       if (io.signal?.aborted) return;
       const ok = this.lastStatus === 0;
       if ((op === "&&" && ok) || (op === "||" && !ok)) {
-        this.lastStatus = await this.runPipeline(pipeline, io);
+        this.lastStatus = await this.runPipeline(pipeline, io, stdin);
       }
     }
   }
 
-  /** Pipes are buffered: each stage runs to completion before the next starts. */
-  private async runPipeline(pipeline: Pipeline, io: IO): Promise<ExitStatus> {
-    let input = "";
+  /**
+   * Pipes are buffered: each stage runs to completion before the next starts. The first
+   * stage reads `stdin` (usually the terminal); later stages read the previous output.
+   */
+  private async runPipeline(pipeline: Pipeline, io: IO, stdin: StdinSource): Promise<ExitStatus> {
+    let input = stdin;
     let status: ExitStatus = 0;
     const { commands } = pipeline;
     for (let i = 0; i < commands.length; i++) {
@@ -100,13 +148,13 @@ export class Shell {
       let captured = "";
       const stdout = isLast ? io.stdout : (s: string) => void (captured += s);
       status = await this.runCommand(commands[i]!, input, { ...io, stdout });
-      input = captured;
+      input = textSource(captured);
     }
     return status;
   }
 
   /** Run one command, then save its disk changes; a failed save fails the command. */
-  private async runCommand(cmd: SimpleCommand, stdin: string, io: IO): Promise<ExitStatus> {
+  private async runCommand(cmd: SimpleCommand, stdin: StdinSource, io: IO): Promise<ExitStatus> {
     const status = await this.execCommand(cmd, stdin, io);
     try {
       await this.fs.flush();
@@ -115,10 +163,11 @@ export class Shell {
       io.stderr(`onno: ${err.message}\n`);
       return 1;
     }
-    return status;
+    // Interrupted (e.g. Ctrl+C while it waited for input): 128 + SIGINT, as in a real shell.
+    return io.signal?.aborted ? INTERRUPTED : status;
   }
 
-  private async execCommand(cmd: SimpleCommand, stdin: string, io: IO): Promise<ExitStatus> {
+  private async execCommand(cmd: SimpleCommand, stdin: StdinSource, io: IO): Promise<ExitStatus> {
     const argv = cmd.argv.map((w) => this.expand(w));
 
     let outFile: string | null = null;
@@ -127,7 +176,7 @@ export class Shell {
       const abs = this.resolvePath(target);
       try {
         if (r.op === "<") {
-          stdin = this.fs.readFile(abs);
+          stdin = textSource(this.fs.readFile(abs));
         } else {
           // Create / truncate now so errors surface before the command runs.
           this.fs.writeFile(abs, "", { append: r.op === ">>" });
@@ -163,10 +212,10 @@ export class Shell {
    */
   runArgv(argv: string[], io: IO, stdin = ""): Promise<ExitStatus> {
     if (!argv.length) return Promise.resolve(0);
-    return this.invoke(argv, stdin, io);
+    return this.invoke(argv, textSource(stdin), io);
   }
 
-  private async invoke(argv: string[], stdin: string, io: IO): Promise<ExitStatus> {
+  private async invoke(argv: string[], stdin: StdinSource, io: IO): Promise<ExitStatus> {
     const [name, ...args] = argv as [string, ...string[]];
     const target = this.resolveCommand(name);
 
@@ -179,7 +228,7 @@ export class Shell {
       // A WebAssembly module is run by the `wasm` builtin (if installed), like a binary.
       const runner = this.builtins.get("wasm");
       if (runner && this.isWasmFile(target.path)) return this.runBuiltin(runner, "wasm", [target.path, ...args], stdin, io);
-      return this.runScript(target.path, name, args, io);
+      return this.runScript(target.path, name, args, stdin, io);
     }
 
     return this.runBuiltin(target.builtin, name, args, stdin, io);
@@ -192,12 +241,12 @@ export class Shell {
     return b[0] === 0x00 && b[1] === 0x61 && b[2] === 0x73 && b[3] === 0x6d; // "\0asm"
   }
 
-  private async runBuiltin(builtin: Builtin, name: string, args: string[], stdin: string, io: IO): Promise<ExitStatus> {
+  private async runBuiltin(builtin: Builtin, name: string, args: string[], stdin: StdinSource, io: IO): Promise<ExitStatus> {
     try {
       return await builtin.run({
         name,
         args,
-        stdin,
+        ...stdinApi(stdin),
         stdout: io.stdout,
         stderr: io.stderr,
         shell: this,
@@ -233,7 +282,8 @@ export class Shell {
     return { kind: "error", message: `${name}: command not found`, status: 127 };
   }
 
-  private async runScript(file: string, name: string, args: string[], io: IO): Promise<ExitStatus> {
+  /** A script's commands share its standard input (`echo x | script` feeds the script). */
+  private async runScript(file: string, name: string, args: string[], stdin: StdinSource, io: IO): Promise<ExitStatus> {
     if (this.positional.length > MAX_SCRIPT_DEPTH) {
       io.stderr(`onno: ${name}: maximum script nesting depth exceeded\n`);
       return 1;
@@ -241,7 +291,7 @@ export class Shell {
     const source = this.fs.readFile(file);
     this.positional.push([name, ...args]);
     try {
-      return await this.run(source, io);
+      return await this.exec(source, io, stdin);
     } finally {
       this.positional.pop();
     }

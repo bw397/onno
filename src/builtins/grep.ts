@@ -275,7 +275,7 @@ export const grep: Builtin = {
     { command: "grep -c . welcome.txt", description: "Count non-empty lines." },
     { command: "cat welcome.txt | grep -o '[a-z]+\\.txt'", description: "Print just the matched text, from a pipe." },
   ],
-  run(ctx) {
+  async run(ctx) {
     let config: Config;
     let inputs: string[];
     try {
@@ -302,7 +302,7 @@ export const grep: Builtin = {
     for (const file of files) {
       let content: string;
       try {
-        content = file.abs === null ? ctx.stdin : ctx.fs.readFile(file.abs);
+        content = file.abs === null ? await ctx.readStdin() : ctx.fs.readFile(file.abs);
       } catch (err) {
         if (!(err instanceof FsError)) throw err;
         error(`${file.name}: ${err.message}`);

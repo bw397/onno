@@ -74,6 +74,11 @@ bun run build    # production bundle into dist/
      directory"). Let other errors propagate.
    - Use `ctx.resolvePath()`; never interpret paths relative to anything else.
    - Long-running or async work must honour `ctx.signal` (Ctrl+C) and return 130.
+   - Read standard input with `await ctx.readStdin()` (all of it) or
+     `for await (const chunk of ctx.stdinChunks())` (as it arrives, to stream like
+     `cat`). Only read stdin when the command actually needs it: from the terminal,
+     reading waits for the user to type and press Ctrl+D. `ctx.stdinIsTerminal` says
+     which case you're in.
    - To launch another command, use `ctx.shell.runArgv(argv, io)` (as `find -exec`
      does).
    - Commands that delete things must refuse the working directory and its parents,
@@ -87,6 +92,20 @@ bun run build    # production bundle into dist/
    behave differently (e.g. binary-file messages, `./` prefixes). Compare against
    `/usr/bin/grep` and `/usr/bin/find` (GNU grep 3.12, findutils 4.11), or run through
    a fresh `bash -c`.
+
+## Standard input
+
+- A command's stdin is a `StdinSource` (`read()` → next chunk or null). The shell
+  builds it: the first stage of a pipeline reads the terminal (`IO.readLine`, provided
+  by `Terminal.tsx`) if there is one, otherwise empty input. Later stages and `<` read
+  text. Scripts share their caller's stdin.
+- The terminal shows an input line without a prompt while a command waits (`reading`
+  state). Enter echoes the line and delivers it with "\n"; Ctrl+D delivers end of
+  input on an empty line, or the partial line without "\n"; Ctrl+C aborts the command
+  and resolves the pending read with null. A command interrupted that way exits 130.
+- Tests drive it by passing `readLine` to `shell.run` (see `src/shell/stdin.test.ts`).
+  In browser tests, `.terminal[data-busy]` means a command is running; the input line
+  can be visible while busy (when a command is reading).
 
 ## Filesystem invariants
 

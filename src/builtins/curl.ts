@@ -136,12 +136,12 @@ function parseUrl(raw: string): URL | null {
   }
 }
 
-function buildBody(ctx: CommandContext, data: Options["data"]): FileContent | undefined {
+function buildBody(ctx: CommandContext, data: Options["data"], stdin: string): FileContent | undefined {
   if (!data.length) return undefined;
   const parts = data.map(({ mode, value }): FileContent => {
     if (mode === "raw" || !value.startsWith("@")) return value;
     const file = value.slice(1);
-    if (file === "-") return mode === "data" ? ctx.stdin.replace(/[\r\n]/g, "") : ctx.stdin;
+    if (file === "-") return mode === "data" ? stdin.replace(/[\r\n]/g, "") : stdin;
     const abs = ctx.resolvePath(file);
     // --data-binary sends a file's exact bytes; -d sends text with newlines removed.
     if (mode === "binary") return ctx.fs.isBinary(abs) ? ctx.fs.readBytes(abs) : ctx.fs.readFile(abs);
@@ -207,7 +207,8 @@ export const curl: Builtin = {
 
     let body: FileContent | undefined;
     try {
-      body = buildBody(ctx, opts.data);
+      const needsStdin = opts.data.some((d) => d.mode !== "raw" && d.value === "@-");
+      body = buildBody(ctx, opts.data, needsStdin ? await ctx.readStdin() : "");
     } catch (err) {
       if (!(err instanceof FsError)) throw err;
       return error(EXIT.usage, `can't read data file: ${err.message}`);

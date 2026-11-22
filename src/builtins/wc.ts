@@ -21,7 +21,7 @@ export const wc: Builtin = {
     { command: "wc -l welcome.txt /etc/motd", description: "Line counts for two files, and a total." },
     { command: "ls / | wc -w", description: "Count words in another command's output." },
   ],
-  run(ctx) {
+  async run(ctx) {
     let parsed;
     try {
       parsed = parseOptions(ctx.args, [
@@ -39,7 +39,7 @@ export const wc: Builtin = {
     const order: Count[] = ["lines", "words", "chars", "bytes"];
     const shown = chosen.size ? order.filter((c) => chosen.has(c)) : (["lines", "words", "bytes"] as Count[]);
 
-    const { inputs, failed } = readInputs(ctx, "wc", parsed.operands);
+    const { inputs, failed } = await readInputs(ctx, "wc", parsed.operands);
     const rows = inputs.map((input) => {
       const text = new TextDecoder().decode(input.bytes);
       const counts: Record<Count, number> = {

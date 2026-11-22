@@ -55,15 +55,36 @@ export interface IO {
   stderr(text: string): void;
   /** Aborted when the user interrupts (Ctrl+C). Long-running commands should honor it. */
   signal?: AbortSignal;
+  /**
+   * Interactive standard input (the terminal): resolves with the next line typed,
+   * including its "\n" (or without one if the user pressed Ctrl+D mid-line), or null at
+   * end of input (Ctrl+D on an empty line, or Ctrl+C). Absent = no terminal (stdin empty).
+   */
+  readLine?(): Promise<string | null>;
 }
 
-export interface CommandContext extends IO {
+/** Where a command's standard input comes from (built by the shell). */
+export interface StdinSource {
+  /** Next chunk, or null at end of input. */
+  read(): Promise<string | null>;
+  /** True if this is the terminal (input is typed interactively). */
+  isTerminal: boolean;
+}
+
+export interface CommandContext extends Omit<IO, "readLine"> {
   /** The name the command was invoked as. */
   name: string;
   /** Arguments, not including the command name. */
   args: string[];
-  /** Everything piped / redirected into the command. */
-  stdin: string;
+  /**
+   * All of standard input: piped or redirected text, or, from the terminal, everything
+   * typed until Ctrl+D. Reading is lazy: nothing waits unless a command asks.
+   */
+  readStdin(): Promise<string>;
+  /** Standard input as it arrives: piped text in one chunk, typed input line by line. */
+  stdinChunks(): AsyncIterable<string>;
+  /** True if standard input is the terminal. */
+  stdinIsTerminal: boolean;
   shell: Shell;
   fs: VirtualFS;
   cwd: string;

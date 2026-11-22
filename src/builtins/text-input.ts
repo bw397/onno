@@ -12,12 +12,12 @@ export interface Input {
  * Read each operand (no operands, or "-", means standard input). Errors are reported as
  * `cmd: file: message` and the input skipped; returns the inputs and whether any failed.
  */
-export function readInputs(ctx: CommandContext, cmd: string, operands: string[]): { inputs: Input[]; failed: boolean } {
+export async function readInputs(ctx: CommandContext, cmd: string, operands: string[]): Promise<{ inputs: Input[]; failed: boolean }> {
   const inputs: Input[] = [];
   let failed = false;
   for (const op of operands.length ? operands : ["-"]) {
     if (op === "-") {
-      inputs.push({ name: operands.length ? "-" : null, bytes: new TextEncoder().encode(ctx.stdin) });
+      inputs.push({ name: operands.length ? "-" : null, bytes: new TextEncoder().encode(await ctx.readStdin()) });
       continue;
     }
     try {
